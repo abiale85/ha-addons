@@ -49,9 +49,21 @@
       <span class="spinner-border spinner-border-sm me-1" style="width:.65rem;height:.65rem;"></span>In calcolo…
     </span>
   </span>
-  <button class="btn btn-sm btn-outline-info" id="refresh-btn" onclick="refreshOverview()" disabled>
+  <button class="btn btn-sm btn-outline-info" id="refresh-btn" onclick="refreshOverview()">
     <i class="bi bi-arrow-clockwise me-1"></i>Aggiorna
   </button>
+</div>
+
+<!-- Banner on-demand -->
+<div id="stats-idle-banner" class="card mb-4">
+  <div class="card-body text-center py-5">
+    <i class="bi bi-bar-chart-line display-4 text-muted d-block mb-3"></i>
+    <p class="text-muted mb-4">Le statistiche non vengono calcolate automaticamente per non appesantire il database.<br>
+    Clicca il bottone per caricare i dati attuali.</p>
+    <button class="btn btn-info btn-lg" onclick="loadDashboard()">
+      <i class="bi bi-play-circle me-2"></i>Carica statistiche
+    </button>
+  </div>
 </div>
 
 <div class="row g-3 mb-4">
@@ -180,7 +192,11 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-  loadDashboard();
+  // Mostra cached se disponibile, altrimenti aspetta il bottone
+  const cached = sessionStorage.getItem('hl_overview_loaded');
+  if (cached === '1') {
+    loadDashboard();
+  }
 });
 
 async function loadDashboard() {
@@ -220,6 +236,11 @@ async function loadDashboard() {
     document.getElementById('kpi-top10').textContent = data.top_10_pct + '%';
     document.getElementById('db-size-val').textContent = data.db_size_human;
 
+    // Nasconde banner on-demand, mostra contenuto
+    document.getElementById('stats-idle-banner')?.remove();
+    document.getElementById('refresh-btn').disabled = false;
+    sessionStorage.setItem('hl_overview_loaded', '1');
+
     // Top sensors chart
     const top = data.top_sensors || [];
     console.log('[HistoLite] Top sensors ricevuti:', top.length, top);
@@ -246,8 +267,6 @@ async function loadDashboard() {
     // Badge "in calcolo" se il background sta ancora girando
     const computingBadge = document.getElementById('computing-badge');
     if (computingBadge) computingBadge.style.display = data.computing ? 'inline' : 'none';
-
-    document.getElementById('refresh-btn').disabled = false;
 
   } catch(e) {
     console.error('[HistoLite] Errore loadDashboard:', e);
