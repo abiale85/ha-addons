@@ -1,0 +1,492 @@
+{% extends "base.html" %}
+{% block title %}- Modifica storia{% endblock %}
+{% block page_title %}<i class="bi bi-pencil-square me-2"></i>Modifica storia sensore{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="sensors">Sensori</a></li>
+    <li class="breadcrumb-item"><a href="sensors/{{ entity_id }}">{{ entity_id }}</a></li>
+    <li class="breadcrumb-item active">Modifica storia</li>
+  </ol>
+</nav>
+
+<!-- Info banner -->
+<div class="alert alert-warning d-flex align-items-center mb-3 py-2">
+  <i class="bi bi-exclamation-triangle-fill me-2"></i>
+  <span>Le modifiche sono <strong>irreversibili</strong> salvo backup.
+  Usa sempre "Anteprima" prima di eseguire eliminazioni.</span>
+</div>
+
+<div class="row g-3">
+
+  <!-- Colonna sinistra: filtri + tabella valori -->
+  <div class="col-lg-8">
+
+    <!-- Filtri -->
+    <div class="card mb-3">
+      <div class="card-header">
+        <i class="bi bi-funnel me-1"></i>Filtri di ricerca
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label small">Da (data/ora)</label>
+            <input type="datetime-local" class="form-control form-control-sm" id="filter-from">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">A (data/ora)</label>
+            <input type="datetime-local" class="form-control form-control-sm" id="filter-to">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Valore minimo</label>
+            <input type="number" class="form-control form-control-sm" id="filter-min-val"
+                   placeholder="opzionale" step="any">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Valore massimo</label>
+            <input type="number" class="form-control form-control-sm" id="filter-max-val"
+                   placeholder="opzionale" step="any">
+          </div>
+          <div class="col-md-4 d-flex align-items-end">
+            <button class="btn btn-sm btn-primary w-100" onclick="applyFilters()">
+              <i class="bi bi-search me-1"></i>Applica filtri
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tabella valori paginata -->
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-table me-1"></i>Valori registrati</span>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-secondary" id="values-count">…</span>
+          <button class="btn btn-xs btn-outline-danger d-none" id="delete-selected-btn"
+                  onclick="deleteSelectedValues()">
+            <i class="bi bi-trash me-1"></i>Elimina selezionati
+          </button>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr>
+                <th style="width:36px">
+                  <input type="checkbox" class="form-check-input" id="select-all-values"
+                         onchange="toggleSelectAllValues(this)">
+                </th>
+                <th>Timestamp</th>
+                <th>Valore</th>
+                <th style="width:50px"></th>
+              </tr>
+            </thead>
+            <tbody id="values-body">
+              <tr><td colspan="4" class="text-center py-4 text-muted">
+                Applica i filtri e clicca "Applica filtri" per visualizzare i dati
+              </td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <!-- Paginazione -->
+      <div class="card-footer py-2 d-flex justify-content-between align-items-center" id="pagination-bar">
+        <span class="small text-muted" id="page-info">—</span>
+        <div class="btn-group btn-group-sm">
+          <button class="btn btn-outline-secondary" id="prev-btn" onclick="changePage(-1)" disabled>
+            <i class="bi bi-chevron-left"></i>
+          </button>
+          <button class="btn btn-outline-secondary" id="next-btn" onclick="changePage(1)" disabled>
+            <i class="bi bi-chevron-right"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Colonna destra: rimozione anomalie -->
+  <div class="col-lg-4">
+
+    <!-- Mini-grafico valori filtrati -->
+    <div class="card mb-3">
+      <div class="card-header">
+        <i class="bi bi-graph-up me-1"></i>Anteprima valori
+        <span class="text-muted small ms-1" id="entity-id-display">{{ entity_id }}</span>
+      </div>
+      <div class="card-body p-2" style="height:160px">
+        <canvas id="values-chart"></canvas>
+        <div class="text-center text-muted small py-3 d-none" id="chart-no-data">Nessun dato grafico</div>
+      </div>
+    </div>
+
+    <!-- Pannello rimozione anomalie -->
+    <div class="card border-danger">
+      <div class="card-header bg-danger bg-opacity-10 text-danger">
+        <i class="bi bi-bug me-1"></i>Rimozione Anomalie
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-3">
+          Definisci i criteri per identificare valori impossibili o fuori range.
+          I criteri si combinano con <strong>OR</strong>.
+        </p>
+
+        <!-- Criterio 1: Negativi -->
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" id="anom-negative" role="switch">
+          <label class="form-check-label">
+            Elimina valori negativi
+            <span class="text-muted small d-block">Quando fisicamente impossibili (es. consumi, temperature)</span>
+          </label>
+        </div>
+
+        <!-- Criterio 2: Range assoluto -->
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Range accettabile</label>
+          <div class="row g-2">
+            <div class="col-6">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text">min</span>
+                <input type="number" class="form-control" id="anom-min" placeholder="opz." step="any">
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text">max</span>
+                <input type="number" class="form-control" id="anom-max" placeholder="opz." step="any">
+              </div>
+            </div>
+          </div>
+          <div class="form-text">Valori FUORI questo range verranno eliminati</div>
+        </div>
+
+        <!-- Criterio 3: Deviazione standard -->
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">
+            Outlier statistici (sigma)
+            <i class="bi bi-info-circle" title="Elimina valori oltre N deviazioni standard dalla media" data-bs-toggle="tooltip"></i>
+          </label>
+          <div class="input-group input-group-sm">
+            <input type="number" class="form-control" id="anom-sigma"
+                   placeholder="es. 3.0 (opzionale)" min="0.5" step="0.5">
+            <span class="input-group-text">σ</span>
+          </div>
+          <div class="form-text">Elimina valori oltre N deviazioni std dalla media</div>
+        </div>
+
+        <!-- Criterio 4: Stati blacklist -->
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Elimina stati specifici</label>
+          <input type="text" class="form-control form-control-sm" id="anom-blacklist"
+                 placeholder="es. unavailable,unknown,-1 (separati da virgola)">
+          <div class="form-text">Elimina tutti i record con questi valori esatti</div>
+        </div>
+
+        <!-- Azioni -->
+        <div class="d-flex flex-column gap-2">
+          <button class="btn btn-outline-warning btn-sm" onclick="previewAnomalies()">
+            <i class="bi bi-eye me-1"></i>Anteprima
+          </button>
+          <div id="anomaly-preview-result" class="small p-2 rounded bg-dark text-muted d-none"></div>
+          <button class="btn btn-danger btn-sm" onclick="executeAnomalies()"
+                  id="execute-anomalies-btn" disabled>
+            <i class="bi bi-trash me-1"></i>Esegui rimozione
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ENTITY_ID = {{ entity_id | tojson }};
+let currentPage = 1;
+let currentFilters = {};
+let totalPages = 1;
+let selectedValueIds = new Set();
+let valuesChart = null;
+let lastAnomalyCount = 0;
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Tooltip Bootstrap
+  document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+    new bootstrap.Tooltip(el);
+  });
+  // Default: carica senza filtri (ultimi 100 valori)
+  loadValues();
+});
+
+// ────────────────────────────────────────────────────────────
+// Filtri e caricamento valori
+// ────────────────────────────────────────────────────────────
+function applyFilters() {
+  currentPage = 1;
+  selectedValueIds.clear();
+  loadValues();
+}
+
+function changePage(delta) {
+  currentPage = Math.max(1, Math.min(totalPages, currentPage + delta));
+  loadValues();
+}
+
+async function loadValues() {
+  const tbody = document.getElementById('values-body');
+  tbody.innerHTML = '<tr><td colspan="4" class="text-center py-3"><div class="spinner-border spinner-border-sm"></div></td></tr>';
+
+  const fromEl = document.getElementById('filter-from').value;
+  const toEl   = document.getElementById('filter-to').value;
+  const minVal = document.getElementById('filter-min-val').value;
+  const maxVal = document.getElementById('filter-max-val').value;
+
+  const params = new URLSearchParams({ page: currentPage, per_page: 100 });
+  if (fromEl) params.set('start_ts', Math.floor(new Date(fromEl).getTime() / 1000));
+  if (toEl)   params.set('end_ts', Math.floor(new Date(toEl).getTime() / 1000));
+  if (minVal !== '') params.set('min_val', parseFloat(minVal));
+  if (maxVal !== '') params.set('max_val', parseFloat(maxVal));
+
+  try {
+    const data = await apiGet(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/values?${params}`);
+    if (data.error) throw new Error(data.error);
+
+    totalPages = data.pages || 1;
+    renderValuesTable(data.records || []);
+    updatePagination(data.total || 0, data.page, data.pages);
+    renderMiniChart(data.records || []);
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" class="text-center py-3 text-danger">${e.message}</td></tr>`;
+  }
+}
+
+function renderValuesTable(records) {
+  const tbody = document.getElementById('values-body');
+  if (!records.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-muted">Nessun valore trovato con i filtri applicati</td></tr>';
+    return;
+  }
+  tbody.innerHTML = records.map(r => {
+    const checked = selectedValueIds.has(r.state_id) ? 'checked' : '';
+    const valClass = isAnomalousDisplay(r.state) ? 'text-warning' : '';
+    return `
+    <tr data-sid="${r.state_id}">
+      <td><input type="checkbox" class="form-check-input val-check" ${checked}
+                 onchange="toggleValueCheck(this, ${r.state_id})"></td>
+      <td class="small text-muted">${fmtTs(r.ts)}</td>
+      <td><code class="${valClass}">${escHtml(String(r.state))}</code></td>
+      <td class="text-end">
+        <button class="btn btn-xs btn-outline-danger" onclick="deleteSingleValue(${r.state_id}, this)"
+                title="Elimina questo record">
+          <i class="bi bi-trash"></i>
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function isAnomalousDisplay(state) {
+  const n = parseFloat(state);
+  return !isNaN(n) && (n < 0 || n > 1e6);
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function updatePagination(total, page, pages) {
+  document.getElementById('values-count').textContent = fmt(total) + ' record';
+  document.getElementById('page-info').textContent = `Pagina ${page} di ${pages} (${fmt(total)} totali)`;
+  document.getElementById('prev-btn').disabled = page <= 1;
+  document.getElementById('next-btn').disabled = page >= pages;
+}
+
+function renderMiniChart(records) {
+  const canvas = document.getElementById('values-chart');
+  const noData = document.getElementById('chart-no-data');
+
+  const numeric = records.filter(r => !isNaN(parseFloat(r.state)) &&
+    !['unknown','unavailable',''].includes(r.state)).reverse();
+
+  if (numeric.length < 2) {
+    canvas.classList.add('d-none');
+    noData.classList.remove('d-none');
+    return;
+  }
+  canvas.classList.remove('d-none');
+  noData.classList.add('d-none');
+
+  const labels = numeric.map(r => fmtTs(r.ts));
+  const values = numeric.map(r => parseFloat(r.state));
+
+  if (valuesChart) valuesChart.destroy();
+  valuesChart = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        borderColor: '#0dcaf0',
+        backgroundColor: 'rgba(13,202,240,0.08)',
+        borderWidth: 1.5,
+        pointRadius: values.length > 50 ? 0 : 3,
+        tension: 0.1,
+        fill: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: false },
+        y: { ticks: { color: '#aaa', font: { size: 10 } }, grid: { color: '#333' } }
+      }
+    }
+  });
+}
+
+// ────────────────────────────────────────────────────────────
+// Selezione e cancellazione valori
+// ────────────────────────────────────────────────────────────
+function toggleValueCheck(cb, sid) {
+  if (cb.checked) selectedValueIds.add(sid);
+  else selectedValueIds.delete(sid);
+  updateDeleteBtn();
+}
+
+function toggleSelectAllValues(cb) {
+  document.querySelectorAll('.val-check').forEach(el => {
+    el.checked = cb.checked;
+    const sid = parseInt(el.closest('tr').dataset.sid);
+    if (cb.checked) selectedValueIds.add(sid);
+    else selectedValueIds.delete(sid);
+  });
+  updateDeleteBtn();
+}
+
+function updateDeleteBtn() {
+  const btn = document.getElementById('delete-selected-btn');
+  btn.classList.toggle('d-none', selectedValueIds.size === 0);
+  btn.textContent = '';
+  btn.innerHTML = `<i class="bi bi-trash me-1"></i>Elimina ${selectedValueIds.size} selezionati`;
+}
+
+async function deleteSingleValue(stateId, btn) {
+  if (!confirm('Eliminare questo singolo record?')) return;
+  btn.disabled = true;
+  try {
+    await apiDeleteJson(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/values`, { state_ids: [stateId] });
+    btn.closest('tr').remove();
+    showToast('Record eliminato', 'success');
+    selectedValueIds.delete(stateId);
+    updateDeleteBtn();
+  } catch(e) {
+    showToast(`Errore: ${e.message}`, 'danger');
+    btn.disabled = false;
+  }
+}
+
+async function deleteSelectedValues() {
+  const ids = [...selectedValueIds];
+  if (!ids.length) return;
+  if (!confirm(`Eliminare ${ids.length} record selezionati? Operazione irreversibile.`)) return;
+  try {
+    const result = await apiDeleteJson(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/values`, { state_ids: ids });
+    showToast(`${result.deleted} record eliminati`, 'success');
+    selectedValueIds.clear();
+    updateDeleteBtn();
+    loadValues();
+  } catch(e) {
+    showToast(`Errore: ${e.message}`, 'danger');
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// Rimozione anomalie
+// ────────────────────────────────────────────────────────────
+function buildAnomCriteria() {
+  const criteria = {};
+  if (document.getElementById('anom-negative').checked) criteria.remove_negative = true;
+  const minV = document.getElementById('anom-min').value;
+  const maxV = document.getElementById('anom-max').value;
+  if (minV !== '') criteria.min_value = parseFloat(minV);
+  if (maxV !== '') criteria.max_value = parseFloat(maxV);
+  const sigma = document.getElementById('anom-sigma').value;
+  if (sigma !== '') criteria.std_dev_multiplier = parseFloat(sigma);
+  const bl = document.getElementById('anom-blacklist').value;
+  if (bl.trim()) criteria.state_blacklist = bl.split(',').map(s => s.trim()).filter(Boolean);
+  return criteria;
+}
+
+async function previewAnomalies() {
+  const criteria = buildAnomCriteria();
+  if (!Object.keys(criteria).length) {
+    showToast('Specifica almeno un criterio di anomalia', 'warning');
+    return;
+  }
+  const div = document.getElementById('anomaly-preview-result');
+  div.className = 'small p-2 rounded bg-dark text-muted';
+  div.textContent = 'Calcolo in corso…';
+  div.classList.remove('d-none');
+  document.getElementById('execute-anomalies-btn').disabled = true;
+
+  try {
+    const result = await apiPost(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/anomalies/preview`, { criteria });
+    if (result.error) throw new Error(result.error);
+
+    lastAnomalyCount = result.count;
+    const samples = (result.samples || []).slice(0, 5).map(s =>
+      `<code>${escHtml(String(s.state))}</code>`
+    ).join(', ');
+
+    div.innerHTML = result.count === 0
+      ? '<span class="text-success"><i class="bi bi-check-circle me-1"></i>Nessuna anomalia trovata con questi criteri</span>'
+      : `<span class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>
+         <strong>${fmt(result.count)}</strong> record anomali trovati<br>
+         <span class="text-muted">Esempi: ${samples || '—'}</span></span>`;
+
+    document.getElementById('execute-anomalies-btn').disabled = result.count === 0;
+  } catch(e) {
+    div.innerHTML = `<span class="text-danger">${e.message}</span>`;
+  }
+}
+
+async function executeAnomalies() {
+  const criteria = buildAnomCriteria();
+  if (!Object.keys(criteria).length) { showToast('Nessun criterio specificato', 'warning'); return; }
+  if (!confirm(`Eliminare ${fmt(lastAnomalyCount)} record anomali? Operazione IRREVERSIBILE.`)) return;
+
+  document.getElementById('execute-anomalies-btn').disabled = true;
+  try {
+    const result = await apiPost(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/anomalies/execute`, { criteria });
+    showToast(`${fmt(result.deleted)} record anomali eliminati!`, 'success');
+    document.getElementById('anomaly-preview-result').innerHTML =
+      `<span class="text-success"><i class="bi bi-check-circle me-1"></i>${fmt(result.deleted)} eliminati</span>`;
+    loadValues();
+  } catch(e) {
+    showToast(`Errore: ${e.message}`, 'danger');
+    document.getElementById('execute-anomalies-btn').disabled = false;
+  }
+}
+
+// ── Helper: DELETE con body JSON ──────────────────────────────────────────
+function apiDeleteJson(path, body) {
+  const url = BASE_PATH + path;
+  return fetch(url, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(async r => {
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${r.status}`);
+    }
+    return r.json();
+  });
+}
+</script>
+{% endblock %}

@@ -100,6 +100,11 @@ def sensor_detail(entity_id):
     return render_template("sensor_detail.html", active="sensors", entity_id=entity_id)
 
 
+@app.route("/sensors/<path:entity_id>/edit")
+def sensor_edit(entity_id):
+    return render_template("sensor_edit.html", active="sensors", entity_id=entity_id)
+
+
 @app.route("/strategies")
 def strategies_page():
     saved = config_manager.list_strategies()
@@ -194,6 +199,66 @@ def api_sensors_list():
         return jsonify(entities)
     except Exception as e:
         logger.error(f"Errore api/sensors/list: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sensors/<path:entity_id>/values")
+def api_sensor_values(entity_id):
+    """Valori paginati con filtri per timeframe e range."""
+    try:
+        start_ts = request.args.get("start_ts", type=float)
+        end_ts = request.args.get("end_ts", type=float)
+        min_val = request.args.get("min_val", type=float)
+        max_val = request.args.get("max_val", type=float)
+        page = int(request.args.get("page", 1))
+        per_page = min(int(request.args.get("per_page", 100)), 500)
+        data = db.get_sensor_values(entity_id, start_ts, end_ts, min_val, max_val, page, per_page)
+        return jsonify(data)
+    except Exception as e:
+        logger.error(f"Errore api/sensors/{entity_id}/values: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sensors/<path:entity_id>/values", methods=["DELETE"])
+def api_delete_sensor_values(entity_id):
+    """Elimina record specifici per state_id."""
+    try:
+        body = request.get_json()
+        state_ids = body.get("state_ids", []) if body else []
+        if not state_ids:
+            return jsonify({"error": "state_ids richiesto"}), 400
+        if len(state_ids) > 1000:
+            return jsonify({"error": "Max 1000 record per richiesta"}), 400
+        deleted = db.delete_states_by_ids([int(i) for i in state_ids])
+        return jsonify({"deleted": deleted})
+    except Exception as e:
+        logger.error(f"Errore delete values {entity_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sensors/<path:entity_id>/anomalies/preview", methods=["POST"])
+def api_anomalies_preview(entity_id):
+    """Anteprima anomalie senza modifiche."""
+    try:
+        body = request.get_json() or {}
+        criteria = body.get("criteria", {})
+        result = db.preview_anomalies(entity_id, criteria)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Errore anomalies preview {entity_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/sensors/<path:entity_id>/anomalies/execute", methods=["POST"])
+def api_anomalies_execute(entity_id):
+    """Elimina anomalie secondo criteri."""
+    try:
+        body = request.get_json() or {}
+        criteria = body.get("criteria", {})
+        result = db.delete_anomalies(entity_id, criteria)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Errore anomalies execute {entity_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 

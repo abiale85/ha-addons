@@ -298,6 +298,91 @@ class AdaptivePurge(Strategy):
 
 
 # ---------------------------------------------------------------------------
+# Strategia 5 - Outlier Purge (Rimozione Anomalie)
+# ---------------------------------------------------------------------------
+
+class OutlierPurge(Strategy):
+    """
+    Rimuove valori anomali/impossibili da sensori numerici.
+    Criteri configurabili:
+      - Valori negativi (quando fisicamente impossibili)
+      - Valori fuori range assoluto [min_value, max_value]
+      - Valori statistici fuori N deviazioni standard dalla media
+      - Stati specifici da eliminare (es. 'unavailable' prolungati)
+    """
+    name = "outlier_purge"
+    label = "Rimozione Anomalie"
+    description = (
+        "Elimina valori impossibili o anomali: negativi, fuori range accettabile, "
+        "o fuori N deviazioni standard dalla media storica."
+    )
+
+    def execute(self, db, entity_ids, params, dry_run=False,
+                backup_path=None, backup_before=False, batch_size=5000):
+        remove_negative = params.get("remove_negative", False)
+        min_value = params.get("min_value")
+        max_value = params.get("max_value")
+        std_mult = params.get("std_dev_multiplier")
+        state_blacklist = params.get("state_blacklist", [])
+
+        if not any([remove_negative, min_value is not None, max_value is not None,
+                    std_mult is not None, state_blacklist]):
+            return {
+                "strategy": self.name, "dry_run": dry_run, "params": params,
+                "entity_count": 0, "total_deleted": 0,
+                "error": "Nessun criterio di anomalia specificato",
+                "details": [],
+            }
+
+        backup_dest = None
+        if not dry_run:
+            backup_dest = self._maybe_backup(db, backup_path, backup_before)
+
+        results = []
+        for eid in entity_ids:
+            try:
+                criteria = {
+                    "remove_negative": remove_negative,
+                    "min_value": min_value,
+                    "max_value": max_value,
+                    "std_dev_multiplier": std_mult,
+                    "state_blacklist": state_blacklist,
+                }
+                if dry_run:
+                    r = db.preview_anomalies(eid, criteria)
+                    results.append({
+                        "entity_id": eid,
+                        "estimated": r.get("count", 0),
+                        "samples": r.get("samples", []),
+                        "dry_run": True,
+                    })
+                else:
+                    r = db.delete_anomalies(eid, criteria, batch_size=batch_size)
+                    results.append({
+                        "entity_id": eid,
+                        "deleted": r.get("deleted", 0),
+                        "total_found": r.get("total_found", 0),
+                    })
+                logger.info(f"[OutlierPurge] {eid}: {'(DRY) ' if dry_run else ''}"
+                            f"{r.get('count', r.get('deleted', 0))} record anomali")
+            except Exception as e:
+                logger.error(f"[OutlierPurge] Errore su {eid}: {e}")
+                results.append({"entity_id": eid, "error": str(e)})
+
+        key = "estimated" if dry_run else "deleted"
+        total_deleted = sum(r.get(key, 0) for r in results if key in r)
+        return {
+            "strategy": self.name,
+            "dry_run": dry_run,
+            "params": params,
+            "entity_count": len(entity_ids),
+            "total_deleted": total_deleted,
+            "backup": backup_dest,
+            "details": results,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Registry e factory
 # ---------------------------------------------------------------------------
 
@@ -306,6 +391,7 @@ STRATEGY_REGISTRY = {
     TemporalDecimation.name: TemporalDecimation,
     RollingAverage.name: RollingAverage,
     AdaptivePurge.name: AdaptivePurge,
+    OutlierPurge.name: OutlierPurge,
 }
 
 STRATEGY_LIST = [
@@ -349,6 +435,23 @@ STRATEGY_LIST = [
              "type": "number", "default": 30, "min": 1},
             {"key": "threshold_3_days", "label": "Eliminazione completa dopo (giorni)",
              "type": "number", "default": 365, "min": 1},
+        ],
+    },
+    {
+        "name": OutlierPurge.name,
+        "label": OutlierPurge.label,
+        "description": OutlierPurge.description,
+        "params": [
+            {"key": "remove_negative", "label": "Elimina valori negativi",
+             "type": "boolean", "default": False},
+            {"key": "min_value", "label": "Valore minimo accettabile (opzionale)",
+             "type": "number", "default": None, "optional": True},
+            {"key": "max_value", "label": "Valore massimo accettabile (opzionale)",
+             "type": "number", "default": None, "optional": True},
+            {"key": "std_dev_multiplier", "label": "Soglia deviazione standard (N sigma, opzionale)",
+             "type": "number", "default": None, "min": 0.5, "optional": True},
+            {"key": "state_blacklist", "label": "Stati da eliminare (es. unavailable, unknown)",
+             "type": "list", "default": [], "optional": True},
         ],
     },
 ]

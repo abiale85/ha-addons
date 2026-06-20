@@ -642,3 +642,252 @@ class HaDatabase:
         except Exception as e:
             logger.error(f"Errore VACUUM: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    # Editing storia sensore
+    # ------------------------------------------------------------------
+
+    def get_sensor_values(
+        self,
+        entity_id: str,
+        start_ts: Optional[float] = None,
+        end_ts: Optional[float] = None,
+        min_val: Optional[float] = None,
+        max_val: Optional[float] = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> dict:
+        """
+        Restituisce i record di un sensore con filtri opzionali su
+        timeframe e range di valori. Paginato. Timeout: 5 sec.
+        """
+        schema = self.get_schema_info()
+        ts_col = "last_updated_ts" if schema["uses_ts"] else "last_updated"
+        offset = (page - 1) * per_page
+
+        conditions = ["entity_id = ?"]
+        params: list = [entity_id]
+
+        # Filtro temporale
+        if schema["uses_ts"]:
+            if start_ts is not None:
+                conditions.append("last_updated_ts >= ?")
+                params.append(start_ts)
+            if end_ts is not None:
+                conditions.append("last_updated_ts <= ?")
+                params.append(end_ts)
+        else:
+            if start_ts is not None:
+                conditions.append("datetime(last_updated) >= datetime(?, 'unixepoch')")
+                params.append(start_ts)
+            if end_ts is not None:
+                conditions.append("datetime(last_updated) <= datetime(?, 'unixepoch')")
+                params.append(end_ts)
+
+        # Filtro valore (solo se numerico)
+        if min_val is not None:
+            conditions.append("CAST(state AS REAL) >= ? AND state NOT IN ('unknown','unavailable','')")
+            params.append(min_val)
+        if max_val is not None:
+            conditions.append("CAST(state AS REAL) <= ? AND state NOT IN ('unknown','unavailable','')")
+            params.append(max_val)
+
+        where = " AND ".join(conditions)
+        order = "DESC" if schema["uses_ts"] else "DESC"
+
+        count_query = f"SELECT COUNT(*) AS c FROM states WHERE {where}"
+        data_query = f"""
+            SELECT state_id, state, {ts_col} AS ts
+            FROM states
+            WHERE {where}
+            ORDER BY ts {order}
+            LIMIT ? OFFSET ?
+        """
+
+        with self._connect(read_only=True) as conn:
+            conn.execute("PRAGMA busy_timeout=5000")
+            try:
+                count_row = conn.execute(count_query, params).fetchone()
+                total = count_row["c"] if count_row else 0
+                rows = conn.execute(data_query, params + [per_page, offset]).fetchall()
+                records = [dict(r) for r in rows]
+
+                # Converti ts a Unix float se è stringa (schema vecchio)
+                if not schema["uses_ts"]:
+                    import time as _time
+                    from datetime import datetime as _dt
+                    for r in records:
+                        if r["ts"] and isinstance(r["ts"], str):
+                            try:
+                                dt = _dt.fromisoformat(r["ts"].replace("Z", "+00:00"))
+                                r["ts"] = dt.timestamp()
+                            except Exception:
+                                pass
+
+                return {
+                    "total": total,
+                    "page": page,
+                    "per_page": per_page,
+                    "pages": max(1, (total + per_page - 1) // per_page),
+                    "records": records,
+                }
+            except sqlite3.OperationalError as e:
+                if "timeout" in str(e).lower():
+                    logger.warning(f"get_sensor_values {entity_id}: timeout")
+                    return {"total": 0, "page": 1, "per_page": per_page, "pages": 1, "records": [], "error": "timeout"}
+                raise
+
+    def delete_states_by_ids(self, state_ids: list[int]) -> int:
+        """Elimina record specifici per state_id. Restituisce il numero eliminati."""
+        if not state_ids:
+            return 0
+        with self._connect(read_only=False) as conn:
+            placeholders = ",".join("?" * len(state_ids))
+            # Annulla riferimenti old_state_id prima di eliminare
+            conn.execute(
+                f"UPDATE states SET old_state_id = NULL "
+                f"WHERE old_state_id IN ({placeholders})",
+                state_ids,
+            )
+            conn.execute(
+                f"DELETE FROM states WHERE state_id IN ({placeholders})", state_ids
+            )
+            conn.commit()
+            return len(state_ids)
+
+    def preview_anomalies(self, entity_id: str, criteria: dict) -> dict:
+        """
+        Anteprima dei record anomali da eliminare. Non modifica nulla.
+        Criteri supportati:
+          - remove_negative: bool (elimina valori < 0)
+          - min_value: float (elimina valori < min)
+          - max_value: float (elimina valori > max)
+          - std_dev_multiplier: float (elimina valori oltre N deviazioni std)
+          - state_whitelist: list[str] (stati non numerici da ELIMINARE)
+          - state_blacklist: list[str] (stati specifici da eliminare, es. 'unavailable')
+        Timeout: 10 sec.
+        """
+        conditions, params = self._build_anomaly_conditions(entity_id, criteria)
+        if not conditions:
+            return {"count": 0, "samples": [], "error": "Nessun criterio valido specificato"}
+
+        where = " AND ".join(conditions)
+        query = f"""
+            SELECT state_id, state
+            FROM states
+            WHERE {where}
+            ORDER BY state_id DESC
+            LIMIT 1000
+        """
+        count_q = f"SELECT COUNT(*) AS c FROM states WHERE {where}"
+
+        with self._connect(read_only=True) as conn:
+            conn.execute("PRAGMA busy_timeout=10000")
+            try:
+                count_row = conn.execute(count_q, params).fetchone()
+                count = count_row["c"] if count_row else 0
+                samples = [dict(r) for r in conn.execute(query, params).fetchall()[:20]]
+                return {"count": count, "samples": samples}
+            except sqlite3.OperationalError as e:
+                if "timeout" in str(e).lower():
+                    return {"count": -1, "samples": [], "error": "Timeout - usa filtri più restrittivi"}
+                raise
+
+    def delete_anomalies(self, entity_id: str, criteria: dict, batch_size: int = 5000) -> dict:
+        """Elimina i record anomali secondo i criteri dati. Ritorna conteggio eliminati."""
+        conditions, params = self._build_anomaly_conditions(entity_id, criteria)
+        if not conditions:
+            return {"deleted": 0, "error": "Nessun criterio valido"}
+
+        where = " AND ".join(conditions)
+
+        with self._connect(read_only=False) as conn:
+            count_row = conn.execute(f"SELECT COUNT(*) AS c FROM states WHERE {where}", params).fetchone()
+            total = count_row["c"] if count_row else 0
+            if total == 0:
+                return {"deleted": 0}
+
+            deleted = 0
+            while True:
+                ids = conn.execute(
+                    f"SELECT state_id FROM states WHERE {where} LIMIT ?",
+                    params + [batch_size],
+                ).fetchall()
+                if not ids:
+                    break
+                id_list = [r["state_id"] for r in ids]
+                ph = ",".join("?" * len(id_list))
+                conn.execute(f"UPDATE states SET old_state_id = NULL WHERE old_state_id IN ({ph})", id_list)
+                conn.execute(f"DELETE FROM states WHERE state_id IN ({ph})", id_list)
+                conn.commit()
+                deleted += len(id_list)
+                if len(id_list) < batch_size:
+                    break
+
+            logger.info(f"delete_anomalies {entity_id}: {deleted}/{total} eliminati")
+            return {"deleted": deleted, "total_found": total}
+
+    def _build_anomaly_conditions(self, entity_id: str, criteria: dict):
+        """Helper: costruisce WHERE conditions per anomalie."""
+        anomaly_conds = []
+        params_list: list = []
+
+        remove_negative = criteria.get("remove_negative", False)
+        min_value = criteria.get("min_value")
+        max_value = criteria.get("max_value")
+        std_mult = criteria.get("std_dev_multiplier")
+        state_blacklist = criteria.get("state_blacklist", [])
+
+        if remove_negative:
+            anomaly_conds.append(
+                "state NOT IN ('unknown','unavailable','') AND CAST(state AS REAL) < 0"
+            )
+        if min_value is not None:
+            anomaly_conds.append(
+                "state NOT IN ('unknown','unavailable','') AND CAST(state AS REAL) < ?"
+            )
+            params_list.append(float(min_value))
+        if max_value is not None:
+            anomaly_conds.append(
+                "state NOT IN ('unknown','unavailable','') AND CAST(state AS REAL) > ?"
+            )
+            params_list.append(float(max_value))
+        if state_blacklist:
+            ph = ",".join("?" * len(state_blacklist))
+            anomaly_conds.append(f"state IN ({ph})")
+            params_list.extend(state_blacklist)
+        if std_mult is not None:
+            # Calcola media e deviazione standard per questo sensore
+            with self._connect(read_only=True) as conn:
+                row = conn.execute(
+                    "SELECT AVG(CAST(state AS REAL)) AS avg_v, "
+                    "SUM((CAST(state AS REAL) - (SELECT AVG(CAST(state AS REAL)) "
+                    "FROM states WHERE entity_id = ? AND "
+                    "state NOT IN ('unknown','unavailable',''))) * "
+                    "(CAST(state AS REAL) - (SELECT AVG(CAST(state AS REAL)) "
+                    "FROM states WHERE entity_id = ? AND "
+                    "state NOT IN ('unknown','unavailable','')))) / COUNT(*) AS variance "
+                    "FROM states WHERE entity_id = ? AND state NOT IN ('unknown','unavailable','')",
+                    (entity_id, entity_id, entity_id),
+                ).fetchone()
+                if row and row["avg_v"] is not None and row["variance"] is not None:
+                    import math
+                    avg = row["avg_v"]
+                    std = math.sqrt(max(0, row["variance"]))
+                    lower = avg - float(std_mult) * std
+                    upper = avg + float(std_mult) * std
+                    anomaly_conds.append(
+                        "state NOT IN ('unknown','unavailable','') AND "
+                        "(CAST(state AS REAL) < ? OR CAST(state AS REAL) > ?)"
+                    )
+                    params_list.extend([lower, upper])
+
+        if not anomaly_conds:
+            return [], []
+
+        # Combina con OR (record anomalo se soddisfa QUALSIASI criterio)
+        combined_anomaly = "(" + " OR ".join(f"({c})" for c in anomaly_conds) + ")"
+        final_conditions = ["entity_id = ?"] + [combined_anomaly]
+        final_params = [entity_id] + params_list
+
+        return final_conditions, final_params
