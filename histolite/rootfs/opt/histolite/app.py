@@ -10,11 +10,33 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.wsgi import DispatcherMiddleware
 
 from database import HaDatabase
 from analyzer import get_db_overview, analyze_sensor
 from strategies import execute_strategy, STRATEGY_LIST
 from config_manager import ConfigManager
+
+
+# ---------------------------------------------------------------------------
+# Middleware per supportare Ingress path prefix
+# ---------------------------------------------------------------------------
+
+class IngressPathMiddleware:
+    """Middleware che rimuove il prefisso Ingress dalle richieste."""
+    def __init__(self, app, ingress_path):
+        self.app = app
+        self.ingress_path = ingress_path
+    
+    def __call__(self, environ, start_response):
+        if self.ingress_path and environ['PATH_INFO'].startswith(self.ingress_path):
+            # Rimuove il prefisso dall'URL
+            environ['PATH_INFO'] = environ['PATH_INFO'][len(self.ingress_path):]
+            if not environ['PATH_INFO']:
+                environ['PATH_INFO'] = '/'
+            # Salva il prefisso per url_for
+            environ['SCRIPT_NAME'] = self.ingress_path
+        return self.app(environ, start_response)
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -40,6 +62,8 @@ PORT = int(os.environ.get("PORT", "8099"))
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+if INGRESS_PATH:
+    app.wsgi_app = IngressPathMiddleware(app.wsgi_app, INGRESS_PATH)
 CORS(app)
 
 db = HaDatabase(DB_PATH)
@@ -61,7 +85,9 @@ def inject_globals():
 
 @app.route("/")
 def index():
-    return redirect(url_for("dashboard"))
+    # Redirige a /dashboard, aggiungendo il prefisso Ingress se presente
+    dashboard_url = (INGRESS_PATH + "/dashboard") if INGRESS_PATH else "/dashboard"
+    return redirect(dashboard_url)
 
 
 @app.route("/dashboard")
