@@ -13,7 +13,10 @@ async function apiFetch(path, options = {}) {
   // Timeout di default 30s; il chiamante può sovrascriverlo con options.timeout
   const timeoutMs = options.timeout ?? 30000;
   const timeoutController = new AbortController();
-  const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
+  const timeoutId = setTimeout(
+    () => timeoutController.abort(new DOMException(`Timeout dopo ${timeoutMs}ms`, 'TimeoutError')),
+    timeoutMs
+  );
 
   // Combina il signal del chiamante con il timeout interno
   let signal = timeoutController.signal;

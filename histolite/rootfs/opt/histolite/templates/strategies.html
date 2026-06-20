@@ -139,7 +139,57 @@
                 </div>
               </div>
             </div>
-          </div>
+            <!-- Params peak decimation -->
+            <div id="fp-peak" class="form-params d-none">
+              <div class="row g-2">
+                <div class="col-8">
+                  <label class="form-label small">Applica a dati più vecchi di</label>
+                  <div class="input-group input-group-sm">
+                    <input type="number" class="form-control" id="fp-peak-days" value="7" min="1">
+                    <span class="input-group-text">giorni</span>
+                  </div>
+                </div>
+                <div class="col-4">
+                  <label class="form-label small">Granularità</label>
+                  <select class="form-select form-select-sm" id="fp-peak-gran">
+                    <option value="hour">Oraria</option>
+                    <option value="day">Giornaliera</option>
+                  </select>
+                </div>
+                <div class="col-12">
+                  <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="fp-peak-resets" checked>
+                    <label class="form-check-label small" for="fp-peak-resets">Preserva punti di reset</label>
+                  </div>
+                </div>
+                <div class="col-8">
+                  <label class="form-label small">Soglia reset (%)</label>
+                  <div class="input-group input-group-sm">
+                    <input type="number" class="form-control" id="fp-peak-threshold" value="50" min="5" max="99" step="5">
+                    <span class="input-group-text">%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- Params outlier purge -->
+            <div id="fp-outlier" class="form-params d-none">
+              <div class="row g-2">
+                <div class="col-6">
+                  <label class="form-label small">Valore minimo</label>
+                  <input type="number" step="any" class="form-control form-control-sm" id="fp-outlier-min" placeholder="(nessun limite)">
+                </div>
+                <div class="col-6">
+                  <label class="form-label small">Valore massimo</label>
+                  <input type="number" step="any" class="form-control form-control-sm" id="fp-outlier-max" placeholder="(nessun limite)">
+                </div>
+                <div class="col-12">
+                  <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="fp-outlier-neg" checked>
+                    <label class="form-check-label small" for="fp-outlier-neg">Rimuovi valori negativi</label>
+                  </div>
+                </div>
+              </div>
+            </div>
         </div>
 
         <div class="d-flex gap-2 mt-3">
@@ -211,11 +261,17 @@
 <script>
 let selectedEntities = [];
 let allSensorsList = [];
+const pageController = new AbortController();
+window.addEventListener('beforeunload', () => pageController.abort());
 
 document.addEventListener('DOMContentLoaded', async () => {
   updateFormParams();
-  allSensorsList = await apiGet('/api/sensors?limit=500');
-  setupEntitySearch();
+  try {
+    allSensorsList = await apiGet('/api/sensors?limit=500');
+    setupEntitySearch();
+  } catch(e) {
+    if (e.name !== 'AbortError') console.error('[HistoLite] Errore caricamento sensori:', e);
+  }
 });
 
 function updateFormParams() {
@@ -226,6 +282,8 @@ function updateFormParams() {
     temporal_decimation: 'fp-temporal',
     rolling_average: 'fp-rolling',
     adaptive_purge: 'fp-adaptive',
+    peak_decimation: 'fp-peak',
+    outlier_purge: 'fp-outlier',
   };
   document.getElementById(map[val])?.classList.remove('d-none');
 }
@@ -308,6 +366,19 @@ function getFormParams() {
     params.threshold_2_days = parseInt(document.getElementById('fp-adp-t2').value, 10);
     params.threshold_3_days = parseInt(document.getElementById('fp-adp-t3').value, 10);
     params.threshold_4_days = 36500;
+  } else if (strategy === 'peak_decimation') {
+    params.older_than_days = parseInt(document.getElementById('fp-peak-days').value, 10);
+    params.granularity = document.getElementById('fp-peak-gran').value;
+    params.keep_resets = document.getElementById('fp-peak-resets').checked;
+    if (params.keep_resets) {
+      params.reset_threshold_pct = parseFloat(document.getElementById('fp-peak-threshold').value) || 50;
+    }
+  } else if (strategy === 'outlier_purge') {
+    params.remove_negative = document.getElementById('fp-outlier-neg').checked;
+    const minVal = document.getElementById('fp-outlier-min').value;
+    const maxVal = document.getElementById('fp-outlier-max').value;
+    if (minVal !== '') params.min_value = parseFloat(minVal);
+    if (maxVal !== '') params.max_value = parseFloat(maxVal);
   }
   return params;
 }
@@ -359,6 +430,15 @@ function editSaved(s) {
     document.getElementById('fp-adp-t1').value = p.threshold_1_days || 7;
     document.getElementById('fp-adp-t2').value = p.threshold_2_days || 30;
     document.getElementById('fp-adp-t3').value = p.threshold_3_days || 365;
+  } else if (s.strategy_type === 'peak_decimation') {
+    document.getElementById('fp-peak-days').value = p.older_than_days || 7;
+    document.getElementById('fp-peak-gran').value = p.granularity || 'hour';
+    document.getElementById('fp-peak-resets').checked = p.keep_resets !== false;
+    document.getElementById('fp-peak-threshold').value = p.reset_threshold_pct || 50;
+  } else if (s.strategy_type === 'outlier_purge') {
+    document.getElementById('fp-outlier-neg').checked = p.remove_negative !== false;
+    document.getElementById('fp-outlier-min').value = p.min_value ?? '';
+    document.getElementById('fp-outlier-max').value = p.max_value ?? '';
   }
   document.getElementById('form-title').textContent = 'Modifica strategia';
   document.getElementById('strategy-form-card').scrollIntoView({ behavior: 'smooth' });
