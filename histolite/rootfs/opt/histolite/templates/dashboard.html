@@ -129,9 +129,10 @@
       </div>
       <div class="col-md-4">
         <div class="maintenance-block border-danger">
-          <div class="maintenance-title text-danger"><i class="bi bi-exclamation-triangle me-1"></i>Dati corrotti (entity_id null)</div>
+          <div class="maintenance-title text-danger"><i class="bi bi-exclamation-triangle me-1"></i>Dati corrotti</div>
           <p class="small text-muted mb-2">
-            Rimuove record in <code>states</code> con <code>entity_id</code> NULL o vuoto.
+            Rimuove record in <code>states</code> con <code>entity_id</code> NULL/vuoto (schema legacy)
+            o con <code>metadata_id</code> orfano (nuovo schema HA).
             Questi record non appartengono ad alcun sensore e causano errori nell'interfaccia.
           </p>
           <div class="d-flex gap-2 align-items-center flex-wrap">
