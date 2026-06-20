@@ -7,7 +7,7 @@ import os
 import logging
 import time
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, redirect
+from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 
 from database import HaDatabase
@@ -72,12 +72,13 @@ def inject_globals():
 
 @app.route("/")
 def index():
-    # Leggi il path Ingress reale dall'header (token-based, es. /api/hassio_ingress/TOKEN)
-    # che HA Ingress invia con ogni richiesta. Il browser segue il redirect
-    # verso quel path e Ingress lo instradata correttamente al container.
-    ingress = _get_ingress_path()
-    target = (ingress + "/dashboard") if ingress else "/dashboard"
-    return redirect(target)
+    # Serve la dashboard direttamente - nessun redirect.
+    # HA Ingress strippa il prefisso prima di inviare a Flask.
+    # Log degli header per diagnosticare Ingress in produzione.
+    logger.info(f"GET / - X-Ingress-Path={request.headers.get('X-Ingress-Path', 'N/A')} "
+                f"Host={request.headers.get('Host', 'N/A')} "
+                f"Referer={request.headers.get('Referer', 'N/A')}")
+    return render_template("dashboard.html", active="dashboard")
 
 
 @app.route("/dashboard")
