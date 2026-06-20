@@ -213,13 +213,30 @@
         <div id="dp-preview-result" class="small text-muted mb-3">
           Usa "Anteprima" per stimare l'impatto prima di applicare.
         </div>
-        <div class="d-flex gap-2">
+        <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary flex-grow-1" onclick="detailPreview()">
             <i class="bi bi-eye me-1"></i>Anteprima
           </button>
           <button class="btn btn-sm btn-danger flex-grow-1" onclick="detailExecute()">
             <i class="bi bi-play-fill me-1"></i>Esegui
           </button>
+          <button class="btn btn-sm btn-outline-success flex-grow-1" onclick="toggleSaveForm()">
+            <i class="bi bi-bookmark-plus me-1"></i>Salva
+          </button>
+        </div>
+        <!-- Form salvataggio strategia (nascosto di default) -->
+        <div id="save-strategy-form" class="mt-3 d-none">
+          <div class="input-group input-group-sm">
+            <input type="text" class="form-control" id="strategy-save-name"
+                   placeholder="Nome della strategia…" maxlength="60">
+            <button class="btn btn-success" onclick="saveDetailStrategy()">
+              <i class="bi bi-check-lg"></i> Salva
+            </button>
+            <button class="btn btn-outline-secondary" onclick="toggleSaveForm()">
+              <i class="bi bi-x"></i>
+            </button>
+          </div>
+          <small class="form-text text-muted">La strategia verrà salvata con questo sensore come entità target.</small>
         </div>
       </div>
     </div>
@@ -231,6 +248,10 @@
 <script>
 const ENTITY_ID = "{{ entity_id }}";
 let densityChart = null;
+
+// AbortController per tutte le richieste di questa pagina
+let pageController = new AbortController();
+window.addEventListener('beforeunload', () => pageController.abort());
 
 const STRATEGY_DESCS = {
   simple_purge: 'Elimina tutti i record più vecchi del limite impostato.',
@@ -247,7 +268,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadDetail() {
   try {
-    const data = await apiGet(`/api/sensors/${encodeURIComponent(ENTITY_ID)}`);
+    const data = await apiFetch(`/api/sensors/${encodeURIComponent(ENTITY_ID)}`,
+      { signal: pageController.signal, timeout: 60000 });
     if (data.error) { showToast(data.error, 'danger'); return; }
 
     const s = data.stats;
@@ -275,7 +297,7 @@ async function loadDetail() {
     loadValueRange();
 
   } catch(e) {
-    showToast('Errore: ' + e.message, 'danger');
+    if (e.name !== 'AbortError') showToast('Errore: ' + e.message, 'danger');
   }
 }
 
@@ -433,7 +455,8 @@ let currentSensorRange = null;
 
 async function loadValueRange() {
   try {
-    const data = await apiGet(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/value-range`);
+    const data = await apiFetch(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/value-range`,
+      { signal: pageController.signal, timeout: 20000 });
     currentSensorRange = data;
     
     // Aggiorna il testo informativo
@@ -459,32 +482,42 @@ async function loadValueRange() {
         `Osservato: ${data.observed_max.toFixed(2)} (stddev: ${data.recent_stddev?.toFixed(2) || '?'})`;
     }
   } catch(e) {
-    console.error('Errore caricamento value-range:', e);
-    document.getElementById('outlier-range-info').innerHTML = 
-      '<span class="text-danger">Errore caricamento intervalli</span>';
+    if (e.name !== 'AbortError') {
+      console.error('Errore caricamento value-range:', e);
+      document.getElementById('outlier-range-info').innerHTML = 
+        '<span class="text-danger">Errore caricamento intervalli</span>';
+    }
   }
 }
 
-function fillOutlierFromRange(type) {
-  if (!currentSensorRange) {
-    showToast('Intervalli non ancora caricati', 'warning');
-    return;
+function toggleSaveForm() {
+  const form = document.getElementById('save-strategy-form');
+  form.classList.toggle('d-none');
+  if (!form.classList.contains('d-none')) {
+    const { strategy } = getDetailParams();
+    const nameEl = document.getElementById('strategy-save-name');
+    if (!nameEl.value) nameEl.value = `${strategy} - ${ENTITY_ID.split('.').pop()}`;
+    nameEl.focus();
   }
-  
-  if (type === 'min') {
-    const value = currentSensorRange.configured_min ?? currentSensorRange.observed_min;
-    if (value !== null) {
-      document.getElementById('dp-outlier-min').value = value;
-    } else {
-      showToast('Valore minimo non disponibile', 'info');
-    }
-  } else if (type === 'max') {
-    const value = currentSensorRange.configured_max ?? currentSensorRange.observed_max;
-    if (value !== null) {
-      document.getElementById('dp-outlier-max').value = value;
-    } else {
-      showToast('Valore massimo non disponibile', 'info');
-    }
+}
+
+async function saveDetailStrategy() {
+  const nameEl = document.getElementById('strategy-save-name');
+  const name = nameEl.value.trim();
+  if (!name) { showToast('Inserisci un nome per la strategia', 'warning'); return; }
+  const { strategy, params } = getDetailParams();
+  try {
+    await apiPost('/api/strategies', {
+      name,
+      strategy_type: strategy,
+      entity_ids: [ENTITY_ID],
+      params,
+    });
+    showToast(`Strategia "${name}" salvata`, 'success');
+    document.getElementById('save-strategy-form').classList.add('d-none');
+    nameEl.value = '';
+  } catch(e) {
+    showToast('Errore salvataggio: ' + e.message, 'danger');
   }
 }
 </script>

@@ -251,6 +251,12 @@ let selectedIds = new Set();
 let sensorLoadController = null;
 let activeRow = null;
 
+// Abort tutte le richieste pendenti quando si naviga via
+window.addEventListener('beforeunload', () => {
+  if (sensorLoadController) sensorLoadController.abort();
+  if (detailController) detailController.abort();
+});
+
 document.addEventListener('DOMContentLoaded', () => {
   // Carica di default i top sensori dalla cache /api/overview
   loadFromOverviewCache();

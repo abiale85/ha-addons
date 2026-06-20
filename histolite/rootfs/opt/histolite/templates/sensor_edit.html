@@ -211,6 +211,9 @@ let totalPages = 1;
 let selectedValueIds = new Set();
 let valuesChart = null;
 let lastAnomalyCount = 0;
+let loadController = null;  // AbortController per le query della tabella
+
+window.addEventListener('beforeunload', () => { if (loadController) loadController.abort(); });
 
 document.addEventListener('DOMContentLoaded', () => {
   // Tooltip Bootstrap
@@ -236,6 +239,10 @@ function changePage(delta) {
 }
 
 async function loadValues() {
+  // Annulla la richiesta precedente se ancora in corso
+  if (loadController) loadController.abort();
+  loadController = new AbortController();
+
   const tbody = document.getElementById('values-body');
   tbody.innerHTML = '<tr><td colspan="4" class="text-center py-3"><div class="spinner-border spinner-border-sm"></div></td></tr>';
 
@@ -251,7 +258,10 @@ async function loadValues() {
   if (maxVal !== '') params.set('max_val', parseFloat(maxVal));
 
   try {
-    const data = await apiGet(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/values?${params}`);
+    const data = await apiFetch(
+      `/api/sensors/${encodeURIComponent(ENTITY_ID)}/values?${params}`,
+      { signal: loadController.signal, timeout: 30000 }
+    );
     if (data.error) throw new Error(data.error);
 
     totalPages = data.pages || 1;
@@ -259,7 +269,9 @@ async function loadValues() {
     updatePagination(data.total || 0, data.page, data.pages);
     renderMiniChart(data.records || []);
   } catch(e) {
-    tbody.innerHTML = `<tr><td colspan="4" class="text-center py-3 text-danger">${e.message}</td></tr>`;
+    if (e.name !== 'AbortError') {
+      tbody.innerHTML = `<tr><td colspan="4" class="text-center py-3 text-danger">${e.message}</td></tr>`;
+    }
   }
 }
 

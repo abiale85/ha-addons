@@ -9,16 +9,36 @@
 
 async function apiFetch(path, options = {}) {
   const url = BASE_PATH + path;
-  const resp = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options,
-  });
-  if (!resp.ok) {
-    let errMsg = `HTTP ${resp.status}`;
-    try { const j = await resp.json(); errMsg = j.error || errMsg; } catch {}
-    throw new Error(errMsg);
+
+  // Timeout di default 30s; il chiamante può sovrascriverlo con options.timeout
+  const timeoutMs = options.timeout ?? 30000;
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
+
+  // Combina il signal del chiamante con il timeout interno
+  let signal = timeoutController.signal;
+  if (options.signal) {
+    // Se il chiamante ha già un signal, usarlo insieme al timeout
+    const callerSignal = options.signal;
+    if (callerSignal.aborted) { clearTimeout(timeoutId); throw new DOMException('Aborted', 'AbortError'); }
+    callerSignal.addEventListener('abort', () => timeoutController.abort(), { once: true });
   }
-  return resp.json();
+
+  try {
+    const resp = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      ...options,
+      signal,
+    });
+    if (!resp.ok) {
+      let errMsg = `HTTP ${resp.status}`;
+      try { const j = await resp.json(); errMsg = j.error || errMsg; } catch {}
+      throw new Error(errMsg);
+    }
+    return resp.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function apiGet(path) {
