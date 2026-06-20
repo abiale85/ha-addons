@@ -650,6 +650,41 @@ class HaDatabase:
             logger.error(f"Errore VACUUM: {e}")
             return False
 
+    def cleanup_null_entities(self, dry_run: bool = False) -> dict:
+        """
+        Conta (dry_run) o elimina i record dalla tabella states con
+        entity_id NULL o stringa vuota.
+        Questi record sono corrotti e non appartengono ad alcun sensore.
+        """
+        with self._connect(read_only=dry_run) as conn:
+            try:
+                count_row = conn.execute(
+                    "SELECT COUNT(*) AS c FROM states "
+                    "WHERE entity_id IS NULL OR entity_id = ''"
+                ).fetchone()
+                count = count_row["c"] if count_row else 0
+
+                if dry_run or count == 0:
+                    return {"deleted": 0, "estimated": count, "dry_run": dry_run}
+
+                # Rimuove riferimenti old_state_id prima di eliminare
+                conn.execute(
+                    "UPDATE states SET old_state_id = NULL "
+                    "WHERE old_state_id IN ("
+                    "  SELECT state_id FROM states "
+                    "  WHERE entity_id IS NULL OR entity_id = ''"
+                    ")"
+                )
+                conn.execute(
+                    "DELETE FROM states WHERE entity_id IS NULL OR entity_id = ''"
+                )
+                conn.commit()
+                logger.info(f"cleanup_null_entities: {count} record eliminati")
+                return {"deleted": count, "estimated": count, "dry_run": False}
+            except Exception as e:
+                logger.error(f"cleanup_null_entities error: {e}", exc_info=True)
+                return {"deleted": 0, "error": str(e), "dry_run": dry_run}
+
     # ------------------------------------------------------------------
     # Editing storia sensore
     # ------------------------------------------------------------------

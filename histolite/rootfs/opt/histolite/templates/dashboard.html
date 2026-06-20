@@ -128,6 +128,24 @@
         </div>
       </div>
       <div class="col-md-4">
+        <div class="maintenance-block border-danger">
+          <div class="maintenance-title text-danger"><i class="bi bi-exclamation-triangle me-1"></i>Dati corrotti (entity_id null)</div>
+          <p class="small text-muted mb-2">
+            Rimuove record in <code>states</code> con <code>entity_id</code> NULL o vuoto.
+            Questi record non appartengono ad alcun sensore e causano errori nell'interfaccia.
+          </p>
+          <div class="d-flex gap-2 align-items-center flex-wrap">
+            <button class="btn btn-sm btn-outline-secondary" onclick="previewNullEntities()">
+              <i class="bi bi-eye me-1"></i>Anteprima
+            </button>
+            <button class="btn btn-sm btn-danger" onclick="cleanupNullEntities()" id="btn-null-cleanup" disabled>
+              <i class="bi bi-trash me-1"></i>Elimina
+            </button>
+            <span class="small text-muted" id="null-entities-count"></span>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
         <div class="maintenance-block">
           <div class="maintenance-title">VACUUM database</div>
           <p class="small text-muted mb-2">
@@ -218,15 +236,18 @@ async function loadDashboard() {
 
 function renderBarChart(id, sensors) {
   const canvas = document.getElementById(id);
-  if (!sensors || sensors.length === 0) {
-    console.warn('[HistoLite] renderBarChart: nessun dato sensori');
+  // Filtra righe con entity_id null/vuoto (possibile nel DB)
+  const valid = (sensors || []).filter(s => s && s.entity_id);
+  if (!valid.length) {
+    console.warn('[HistoLite] renderBarChart: nessun dato sensori valido');
     canvas.parentElement.innerHTML = '<div class="text-center text-muted py-5">Nessun dato sensori disponibile</div>';
     return;
   }
-  const labels = sensors.map(s => s.entity_id.split('.').pop());
-  const values = sensors.map(s => s.record_count);
+  const labels = valid.map(s => s.entity_id.split('.').pop());
+  const values = valid.map(s => s.record_count);
   const colors = values.map((v, i) => `hsl(${200 + i * 18}, 70%, 55%)`);
 
+  const colors = values.map((v, i) => `hsl(${200 + i * 18}, 70%, 55%)`);
   new Chart(canvas, {
     type: 'bar',
     data: {
@@ -303,6 +324,44 @@ async function runMaintenance(action) {
     );
   } catch(e) {
     showToast(`Errore: ${e.message}`, 'danger');
+  }
+}
+
+async function previewNullEntities() {
+  const el = document.getElementById('null-entities-count');
+  el.textContent = 'Calcolo…';
+  try {
+    const result = await apiPost('/api/maintenance/cleanup-null-entities', { dry_run: true });
+    const count = result.estimated ?? 0;
+    if (count === 0) {
+      el.innerHTML = '<span class="text-success">Nessun record corrotto trovato</span>';
+      document.getElementById('btn-null-cleanup').disabled = true;
+    } else {
+      el.innerHTML = `<span class="text-danger"><strong>${fmt(count)}</strong> record corrotti</span>`;
+      document.getElementById('btn-null-cleanup').disabled = false;
+    }
+  } catch(e) {
+    el.innerHTML = `<span class="text-danger">${e.message}</span>`;
+  }
+}
+
+async function cleanupNullEntities() {
+  const countText = document.getElementById('null-entities-count').textContent;
+  if (!confirm(`Eliminare tutti i record con entity_id NULL o vuoto?\nQuesti dati sono corrotti e non recuperabili.`)) return;
+  document.getElementById('btn-null-cleanup').disabled = true;
+  try {
+    const result = await apiPost('/api/maintenance/cleanup-null-entities', { dry_run: false });
+    showToast(
+      result.error
+        ? `Errore: ${result.error}`
+        : `Eliminati ${fmt(result.deleted)} record corrotti`,
+      result.error ? 'danger' : 'success'
+    );
+    document.getElementById('null-entities-count').innerHTML =
+      result.error ? '' : '<span class="text-success">Completato</span>';
+  } catch(e) {
+    showToast(`Errore: ${e.message}`, 'danger');
+    document.getElementById('btn-null-cleanup').disabled = false;
   }
 }
 

@@ -428,6 +428,20 @@ def api_cleanup_attributes():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/maintenance/cleanup-null-entities", methods=["POST"])
+def api_cleanup_null_entities():
+    try:
+        body = request.get_json(force=True) or {}
+        dry_run = body.get("dry_run", False)
+        result = db.cleanup_null_entities(dry_run=dry_run)
+        if not dry_run:
+            config_manager.save_job(result, "cleanup_null_entities", [], {}, dry_run=False)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Errore cleanup-null-entities: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/maintenance/vacuum", methods=["POST"])
 def api_vacuum():
     try:

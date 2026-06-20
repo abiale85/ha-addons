@@ -1,4 +1,4 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block title %}- Sensori{% endblock %}
 {% block page_title %}<i class="bi bi-reception-4 me-2"></i>Sensori{% endblock %}
 
@@ -11,13 +11,13 @@
         <div class="input-group input-group-sm">
           <span class="input-group-text"><i class="bi bi-search"></i></span>
           <input type="text" class="form-control" id="search-input"
-                 placeholder="Cerca entitÃ  (es. sensor.power, climateâ€¦)"
+                 placeholder="Cerca entitÃ  (es. sensor.power, climate…)"
                  value="{{ search }}">
         </div>
       </div>
       <div class="col-md-3">
         <select class="form-select form-select-sm" id="sort-select">
-          <option value="count" {% if sort == 'count' %}selected{% endif %}>Ordina: piÃ¹ record</option>
+          <option value="count" {% if sort == 'count' %}selected{% endif %}>Ordina: più record</option>
           <option value="entity" {% if sort == 'entity' %}selected{% endif %}>Ordina: nome entitÃ </option>
         </select>
       </div>
@@ -67,7 +67,7 @@
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-table me-1"></i>Elenco sensori</span>
         <div class="d-flex align-items-center gap-2">
-          <span class="badge bg-secondary" id="sensors-count">â€¦</span>
+          <span class="badge bg-secondary" id="sensors-count">…</span>
           <span class="badge bg-info" id="source-badge" title="Dati dalla cache overview">cache</span>
         </div>
       </div>
@@ -89,7 +89,7 @@
             </thead>
             <tbody id="sensors-body">
               <tr><td colspan="6" class="text-center py-5 text-muted">
-                <div class="spinner-border spinner-border-sm me-2"></div>Caricamentoâ€¦
+                <div class="spinner-border spinner-border-sm me-2"></div>Caricamento…
               </td></tr>
             </tbody>
           </table>
@@ -108,7 +108,7 @@
     <div class="card sticky-top" style="top:80px" id="detail-panel">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-zoom-in me-1"></i>Dettaglio sensore</span>
-        <span class="text-muted small" id="detail-eid">â€” clicca una riga â€”</span>
+        <span class="text-muted small" id="detail-eid">"” clicca una riga "”</span>
       </div>
       <div class="card-body" id="detail-body">
         <div class="text-center py-4 text-muted">
@@ -133,16 +133,16 @@
         <div class="mb-3">
           <label class="form-label">Strategia</label>
           <select class="form-select" id="quick-strategy" onchange="updateQuickParams()">
-            <option value="simple_purge">Purge Semplice â€” elimina tutto oltre N giorni</option>
-            <option value="temporal_decimation">Decimazione Temporale â€” 1/ora poi 1/giorno</option>
-            <option value="rolling_average">Media Mobile â€” sostituisce con medie (solo numerici)</option>
-            <option value="adaptive_purge">Purge Adattivo â€” multi-fascia personalizzabile</option>
-            <option value="outlier_purge">Rimozione Anomalie â€” elimina valori impossibili/fuori range</option>
+            <option value="simple_purge">Purge Semplice "” elimina tutto oltre N giorni</option>
+            <option value="temporal_decimation">Decimazione Temporale "” 1/ora poi 1/giorno</option>
+            <option value="rolling_average">Media Mobile "” sostituisce con medie (solo numerici)</option>
+            <option value="adaptive_purge">Purge Adattivo "” multi-fascia personalizzabile</option>
+            <option value="outlier_purge">Rimozione Anomalie "” elimina valori impossibili/fuori range</option>
           </select>
         </div>
         <!-- Parametri dinamici -->
         <div id="quick-params-simple" class="strategy-params">
-          <label class="form-label">Elimina record piÃ¹ vecchi di</label>
+          <label class="form-label">Elimina record più vecchi di</label>
           <div class="input-group">
             <input type="number" class="form-control" id="q-simple-days" value="30" min="1">
             <span class="input-group-text">giorni</span>
@@ -156,7 +156,7 @@
           </div>
         </div>
         <div id="quick-params-rolling" class="strategy-params d-none">
-          <label class="form-label">Applica media ai dati piÃ¹ vecchi di</label>
+          <label class="form-label">Applica media ai dati più vecchi di</label>
           <div class="input-group mb-2">
             <input type="number" class="form-control" id="q-roll-days" value="7" min="1">
             <span class="input-group-text">giorni</span>
@@ -278,7 +278,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // â”€â”€ Carica top sensori dalla cache overview (velocissimo) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadFromOverviewCache() {
   const tbody = document.getElementById('sensors-body');
-  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamentoâ€¦</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento…</td></tr>';
   document.getElementById('source-badge').textContent = 'cache';
   document.getElementById('source-badge').className = 'badge bg-info';
   try {
@@ -313,7 +313,7 @@ async function loadFullList() {
   if (sensorLoadController) sensorLoadController.abort();
   sensorLoadController = new AbortController();
   
-  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento lista completaâ€¦</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento lista completa…</td></tr>';
   document.getElementById('load-btn').classList.add('d-none');
   document.getElementById('stop-btn').classList.remove('d-none');
   document.getElementById('source-badge').textContent = 'live';
@@ -350,7 +350,7 @@ async function loadSensors() {
   if (sensorLoadController) sensorLoadController.abort();
   sensorLoadController = new AbortController();
   
-  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Ricercaâ€¦</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Ricerca…</td></tr>';
   document.getElementById('load-btn').classList.add('d-none');
   document.getElementById('stop-btn').classList.remove('d-none');
   document.getElementById('source-badge').textContent = 'ricerca';
@@ -405,22 +405,25 @@ function renderSensorsTable(sensors) {
     return;
   }
   const maxCount = sensors.reduce((m, s) => Math.max(m, s.record_count || 0), 1);
-  tbody.innerHTML = sensors.map(s => {
+  tbody.innerHTML = sensors.filter(s => s && s.entity_id).map(s => {
     const count = s.record_count || 0;
     const pct = maxCount > 0 ? Math.round(count / maxCount * 100) : 0;
-    const domain = s.entity_id.split('.')[0];
+    const domain = s.entity_id.split('.')[0] || '?';
     const checked = selectedIds.has(s.entity_id) ? 'checked' : '';
+    const eidAttr = s.entity_id.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+    const eidDisp = s.entity_id.replace(/&/g,'&amp;').replace(/</g,'&lt;');
     const countCell = count > 0
       ? `<strong>${fmt(count)}</strong>`
-      : `<span class="text-muted small">â€”</span>`;
+      : `<span class="text-muted small">&mdash;</span>`;
+
     return `
-    <tr class="sensor-row ${checked ? 'table-active' : ''}" data-eid="${s.entity_id}"
-        onclick="selectDetailRow(this, '${s.entity_id}')">
+    <tr class="sensor-row ${checked ? 'table-active' : ''}" data-eid="${eidAttr}"
+        onclick="selectDetailRow(this, this.dataset.eid)">
       <td onclick="event.stopPropagation()">
         <input type="checkbox" class="form-check-input row-check" ${checked}
-               onchange="toggleRow(this, '${s.entity_id}')">
+               onchange="toggleRow(this, this.closest('tr').dataset.eid)">
       </td>
-      <td><code class="entity-id small">${s.entity_id}</code></td>
+      <td><code class="entity-id small">${eidDisp}</code></td>
       <td><span class="badge domain-badge domain-${domain}">${domain}</span></td>
       <td class="text-end">${countCell}</td>
       <td class="text-end" style="min-width:70px">
@@ -466,7 +469,7 @@ async function selectDetailRow(row, eid) {
     const lastSeen = fmtTs(stats.last_ts || stats.last_seen);
     const daySpan = stats.first_ts
       ? Math.round((Date.now()/1000 - stats.first_ts) / 86400) + ' gg'
-      : 'â€”';
+      : '"”';
 
     body.innerHTML = `
       <div class="row g-2 mb-3">
@@ -589,7 +592,7 @@ async function runPreview() {
   const { strategy, params } = getQuickParams();
   const entity_ids = [...selectedIds];
   if (!entity_ids.length) { document.getElementById('preview-result').innerHTML = '<span class="text-warning">Seleziona almeno un sensore</span>'; return; }
-  document.getElementById('preview-result').innerHTML = '<span class="text-muted"><div class="spinner-border spinner-border-sm me-1"></div>Calcoloâ€¦</span>';
+  document.getElementById('preview-result').innerHTML = '<span class="text-muted"><div class="spinner-border spinner-border-sm me-1"></div>Calcolo…</span>';
   try {
     const result = await apiPost('/api/preview', { strategy_type: strategy, entity_ids, params });
     const del = result.total_deleted ?? result.estimated_deleted ?? '?';
@@ -604,9 +607,9 @@ async function executeQuickStrategy() {
   const { strategy, params } = getQuickParams();
   const entity_ids = [...selectedIds];
   if (!entity_ids.length) { showToast('Seleziona almeno un sensore', 'warning'); return; }
-  if (!confirm(`Confermi "${strategy}" su ${entity_ids.length} entitÃ ?\nL'operazione non Ã¨ reversibile (salvo backup).`)) return;
+  if (!confirm(`Confermi "${strategy}" su ${entity_ids.length} entitÃ ?\nL'operazione non è reversibile (salvo backup).`)) return;
   bootstrap.Modal.getInstance(document.getElementById('quickPurgeModal')).hide();
-  showToast('Esecuzione in corsoâ€¦', 'info');
+  showToast('Esecuzione in corso…', 'info');
   try {
     const result = await apiPost('/api/execute', { strategy_type: strategy, entity_ids, params });
     showToast(
