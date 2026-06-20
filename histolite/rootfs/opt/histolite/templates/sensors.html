@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% block title %}- Sensori{% endblock %}
 {% block page_title %}<i class="bi bi-reception-4 me-2"></i>Sensori{% endblock %}
 
@@ -11,14 +11,14 @@
         <div class="input-group input-group-sm">
           <span class="input-group-text"><i class="bi bi-search"></i></span>
           <input type="text" class="form-control" id="search-input"
-                 placeholder="Cerca entità (es. sensor.power, climate…)"
+                 placeholder="Cerca entitÃ  (es. sensor.power, climateâ€¦)"
                  value="{{ search }}">
         </div>
       </div>
       <div class="col-md-3">
         <select class="form-select form-select-sm" id="sort-select">
-          <option value="count" {% if sort == 'count' %}selected{% endif %}>Ordina: più record</option>
-          <option value="entity" {% if sort == 'entity' %}selected{% endif %}>Ordina: nome entità</option>
+          <option value="count" {% if sort == 'count' %}selected{% endif %}>Ordina: piÃ¹ record</option>
+          <option value="entity" {% if sort == 'entity' %}selected{% endif %}>Ordina: nome entitÃ </option>
         </select>
       </div>
       <div class="col-md-2">
@@ -67,7 +67,7 @@
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-table me-1"></i>Elenco sensori</span>
         <div class="d-flex align-items-center gap-2">
-          <span class="badge bg-secondary" id="sensors-count">…</span>
+          <span class="badge bg-secondary" id="sensors-count">â€¦</span>
           <span class="badge bg-info" id="source-badge" title="Dati dalla cache overview">cache</span>
         </div>
       </div>
@@ -80,7 +80,7 @@
                   <input type="checkbox" class="form-check-input" id="select-all"
                          onchange="toggleSelectAll(this)">
                 </th>
-                <th>Entità</th>
+                <th>EntitÃ </th>
                 <th>Dominio</th>
                 <th class="text-end">Record</th>
                 <th class="text-end">Barra</th>
@@ -89,7 +89,7 @@
             </thead>
             <tbody id="sensors-body">
               <tr><td colspan="6" class="text-center py-5 text-muted">
-                <div class="spinner-border spinner-border-sm me-2"></div>Caricamento…
+                <div class="spinner-border spinner-border-sm me-2"></div>Caricamentoâ€¦
               </td></tr>
             </tbody>
           </table>
@@ -108,7 +108,7 @@
     <div class="card sticky-top" style="top:80px" id="detail-panel">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-zoom-in me-1"></i>Dettaglio sensore</span>
-        <span class="text-muted small" id="detail-eid">— clicca una riga —</span>
+        <span class="text-muted small" id="detail-eid">â€” clicca una riga â€”</span>
       </div>
       <div class="card-body" id="detail-body">
         <div class="text-center py-4 text-muted">
@@ -133,16 +133,16 @@
         <div class="mb-3">
           <label class="form-label">Strategia</label>
           <select class="form-select" id="quick-strategy" onchange="updateQuickParams()">
-            <option value="simple_purge">Purge Semplice — elimina tutto oltre N giorni</option>
-            <option value="temporal_decimation">Decimazione Temporale — 1/ora poi 1/giorno</option>
-            <option value="rolling_average">Media Mobile — sostituisce con medie (solo numerici)</option>
-            <option value="adaptive_purge">Purge Adattivo — multi-fascia personalizzabile</option>
-            <option value="outlier_purge">Rimozione Anomalie — elimina valori impossibili/fuori range</option>
+            <option value="simple_purge">Purge Semplice â€” elimina tutto oltre N giorni</option>
+            <option value="temporal_decimation">Decimazione Temporale â€” 1/ora poi 1/giorno</option>
+            <option value="rolling_average">Media Mobile â€” sostituisce con medie (solo numerici)</option>
+            <option value="adaptive_purge">Purge Adattivo â€” multi-fascia personalizzabile</option>
+            <option value="outlier_purge">Rimozione Anomalie â€” elimina valori impossibili/fuori range</option>
           </select>
         </div>
         <!-- Parametri dinamici -->
         <div id="quick-params-simple" class="strategy-params">
-          <label class="form-label">Elimina record più vecchi di</label>
+          <label class="form-label">Elimina record piÃ¹ vecchi di</label>
           <div class="input-group">
             <input type="number" class="form-control" id="q-simple-days" value="30" min="1">
             <span class="input-group-text">giorni</span>
@@ -152,17 +152,17 @@
           <label class="form-label">Soglia appiattimento orario</label>
           <div class="input-group mb-2">
             <input type="number" class="form-control" id="q-temp-days" value="14" min="1">
-            <span class="input-group-text">giorni (giornaliero = 2×)</span>
+            <span class="input-group-text">giorni (giornaliero = 2Ã—)</span>
           </div>
         </div>
         <div id="quick-params-rolling" class="strategy-params d-none">
-          <label class="form-label">Applica media ai dati più vecchi di</label>
+          <label class="form-label">Applica media ai dati piÃ¹ vecchi di</label>
           <div class="input-group mb-2">
             <input type="number" class="form-control" id="q-roll-days" value="7" min="1">
             <span class="input-group-text">giorni</span>
           </div>
           <div>
-            <label class="form-label">Granularità</label>
+            <label class="form-label">GranularitÃ </label>
             <select class="form-select" id="q-roll-gran">
               <option value="hour">Oraria</option>
               <option value="day">Giornaliera</option>
@@ -275,10 +275,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// ── Carica top sensori dalla cache overview (velocissimo) ──────────────────
+// â”€â”€ Carica top sensori dalla cache overview (velocissimo) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadFromOverviewCache() {
   const tbody = document.getElementById('sensors-body');
-  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamentoâ€¦</td></tr>';
   document.getElementById('source-badge').textContent = 'cache';
   document.getElementById('source-badge').className = 'badge bg-info';
   try {
@@ -290,21 +290,21 @@ async function loadFromOverviewCache() {
       last_seen: s.last_seen,
     }));
     if (allSensors.length === 0) {
-      // Overview vuota → carica lista completa
+      // Overview vuota â†’ carica lista completa
       document.getElementById('load-more-row').classList.remove('d-none');
       tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">Nessun dato in cache. Clicca "Carica lista completa" qui sotto.</td></tr>';
-      document.getElementById('sensors-count').textContent = '0 entità';
+      document.getElementById('sensors-count').textContent = '0 entitÃ ';
       return;
     }
     sortAndRender();
-    document.getElementById('sensors-count').textContent = allSensors.length + ' top entità';
+    document.getElementById('sensors-count').textContent = allSensors.length + ' top entitÃ ';
     document.getElementById('load-more-row').classList.remove('d-none');
   } catch(e) {
     tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger">${e.message}</td></tr>`;
   }
 }
 
-// ── Carica lista completa con conteggi (GROUP BY, potenzialmente lento) ─────
+// â”€â”€ Carica lista completa con conteggi (GROUP BY, potenzialmente lento) â”€â”€â”€â”€â”€
 async function loadFullList() {
   const search = document.getElementById('search-input').value;
   const limit = document.getElementById('limit-select').value;
@@ -313,7 +313,7 @@ async function loadFullList() {
   if (sensorLoadController) sensorLoadController.abort();
   sensorLoadController = new AbortController();
   
-  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento lista completa…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento lista completaâ€¦</td></tr>';
   document.getElementById('load-btn').classList.add('d-none');
   document.getElementById('stop-btn').classList.remove('d-none');
   document.getElementById('source-badge').textContent = 'live';
@@ -328,7 +328,7 @@ async function loadFullList() {
     ).then(r => r.json());
     
     sortAndRender();
-    document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
+    document.getElementById('sensors-count').textContent = allSensors.length + ' entitÃ ';
   } catch(e) {
     if (e.name === 'AbortError') {
       tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Caricamento annullato</td></tr>';
@@ -342,7 +342,7 @@ async function loadFullList() {
   }
 }
 
-// ── loadSensors: per ricerca testuale (usa /api/sensors/list veloce) ─────────
+// â”€â”€ loadSensors: per ricerca testuale (usa /api/sensors/list veloce) â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function loadSensors() {
   const search = document.getElementById('search-input').value;
   const tbody = document.getElementById('sensors-body');
@@ -350,7 +350,7 @@ async function loadSensors() {
   if (sensorLoadController) sensorLoadController.abort();
   sensorLoadController = new AbortController();
   
-  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Ricerca…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Ricercaâ€¦</td></tr>';
   document.getElementById('load-btn').classList.add('d-none');
   document.getElementById('stop-btn').classList.remove('d-none');
   document.getElementById('source-badge').textContent = 'ricerca';
@@ -365,7 +365,7 @@ async function loadSensors() {
     
     allSensors = entities.map(e => ({ entity_id: e.entity_id, record_count: 0 }));
     sortAndRender();
-    document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
+    document.getElementById('sensors-count').textContent = allSensors.length + ' entitÃ ';
     // Offri di caricare con conteggi
     if (allSensors.length > 0) {
       document.getElementById('load-more-row').classList.remove('d-none');
@@ -385,7 +385,7 @@ function cancelLoadSensors() {
   if (sensorLoadController) sensorLoadController.abort();
 }
 
-// ── Ordina e renderizza ───────────────────────────────────────────────────────
+// â”€â”€ Ordina e renderizza â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function sortAndRender() {
   const sort = document.getElementById('sort-select').value;
   const limit = parseInt(document.getElementById('limit-select').value);
@@ -412,7 +412,7 @@ function renderSensorsTable(sensors) {
     const checked = selectedIds.has(s.entity_id) ? 'checked' : '';
     const countCell = count > 0
       ? `<strong>${fmt(count)}</strong>`
-      : `<span class="text-muted small">—</span>`;
+      : `<span class="text-muted small">â€”</span>`;
     return `
     <tr class="sensor-row ${checked ? 'table-active' : ''}" data-eid="${s.entity_id}"
         onclick="selectDetailRow(this, '${s.entity_id}')">
@@ -440,7 +440,7 @@ function renderSensorsTable(sensors) {
   }).join('');
 }
 
-// ── Dettaglio on-demand al click sulla riga ────────────────────────────────
+// â”€â”€ Dettaglio on-demand al click sulla riga â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let detailController = null;
 
 async function selectDetailRow(row, eid) {
@@ -466,7 +466,7 @@ async function selectDetailRow(row, eid) {
     const lastSeen = fmtTs(stats.last_ts || stats.last_seen);
     const daySpan = stats.first_ts
       ? Math.round((Date.now()/1000 - stats.first_ts) / 86400) + ' gg'
-      : '—';
+      : 'â€”';
 
     body.innerHTML = `
       <div class="row g-2 mb-3">
@@ -512,7 +512,7 @@ async function selectDetailRow(row, eid) {
   }
 }
 
-// ── Selezione multipla ─────────────────────────────────────────────────────
+// â”€â”€ Selezione multipla â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function toggleRow(cb, eid) {
   if (cb.checked) selectedIds.add(eid);
   else selectedIds.delete(eid);
@@ -544,7 +544,7 @@ function updateSelectionToolbar() {
   document.getElementById('sel-count').textContent = selectedIds.size;
 }
 
-// ── Strategia rapida (modal) ──────────────────────────────────────────────
+// â”€â”€ Strategia rapida (modal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function updateQuickParams() {
   const val = document.getElementById('quick-strategy').value;
   document.querySelectorAll('.strategy-params').forEach(el => el.classList.add('d-none'));
@@ -589,12 +589,12 @@ async function runPreview() {
   const { strategy, params } = getQuickParams();
   const entity_ids = [...selectedIds];
   if (!entity_ids.length) { document.getElementById('preview-result').innerHTML = '<span class="text-warning">Seleziona almeno un sensore</span>'; return; }
-  document.getElementById('preview-result').innerHTML = '<span class="text-muted"><div class="spinner-border spinner-border-sm me-1"></div>Calcolo…</span>';
+  document.getElementById('preview-result').innerHTML = '<span class="text-muted"><div class="spinner-border spinner-border-sm me-1"></div>Calcoloâ€¦</span>';
   try {
     const result = await apiPost('/api/preview', { strategy_type: strategy, entity_ids, params });
     const del = result.total_deleted ?? result.estimated_deleted ?? '?';
     document.getElementById('preview-result').innerHTML =
-      `<span class="text-info"><i class="bi bi-info-circle me-1"></i>Stima: <strong>${fmt(del)}</strong> record su ${entity_ids.length} entità</span>`;
+      `<span class="text-info"><i class="bi bi-info-circle me-1"></i>Stima: <strong>${fmt(del)}</strong> record su ${entity_ids.length} entitÃ </span>`;
   } catch(e) {
     document.getElementById('preview-result').innerHTML = `<span class="text-danger">${e.message}</span>`;
   }
@@ -604,9 +604,9 @@ async function executeQuickStrategy() {
   const { strategy, params } = getQuickParams();
   const entity_ids = [...selectedIds];
   if (!entity_ids.length) { showToast('Seleziona almeno un sensore', 'warning'); return; }
-  if (!confirm(`Confermi "${strategy}" su ${entity_ids.length} entità?\nL'operazione non è reversibile (salvo backup).`)) return;
+  if (!confirm(`Confermi "${strategy}" su ${entity_ids.length} entitÃ ?\nL'operazione non Ã¨ reversibile (salvo backup).`)) return;
   bootstrap.Modal.getInstance(document.getElementById('quickPurgeModal')).hide();
-  showToast('Esecuzione in corso…', 'info');
+  showToast('Esecuzione in corsoâ€¦', 'info');
   try {
     const result = await apiPost('/api/execute', { strategy_type: strategy, entity_ids, params });
     showToast(
@@ -616,427 +616,6 @@ async function executeQuickStrategy() {
     );
     clearSelection();
     loadFromOverviewCache();
-  } catch(e) {
-    showToast(`Errore: ${e.message}`, 'danger');
-  }
-}
-</script>
-{% endblock %}
-
-{% block content %}
-<!-- Toolbar -->
-<div class="card mb-3">
-  <div class="card-body py-2">
-    <div class="row g-2 align-items-center">
-      <div class="col-md-5">
-        <div class="input-group input-group-sm">
-          <span class="input-group-text"><i class="bi bi-search"></i></span>
-          <input type="text" class="form-control" id="search-input"
-                 placeholder="Cerca entità (es. sensor.power, climate…)"
-                 value="{{ search }}">
-        </div>
-      </div>
-      <div class="col-md-3">
-        <select class="form-select form-select-sm" id="sort-select">
-          <option value="count" {% if sort == 'count' %}selected{% endif %}>Ordina: più record</option>
-          <option value="entity" {% if sort == 'entity' %}selected{% endif %}>Ordina: nome entità</option>
-        </select>
-      </div>
-      <div class="col-md-2">
-        <select class="form-select form-select-sm" id="limit-select">
-          <option value="100">100 risultati</option>
-          <option value="200" selected>200 risultati</option>
-          <option value="500">500 risultati</option>
-        </select>
-      </div>
-      <div class="col-md-2 text-end">
-        <button class="btn btn-sm btn-primary" id="load-btn" onclick="loadSensors()">
-          <i class="bi bi-arrow-clockwise me-1"></i>Aggiorna
-        </button>
-        <button class="btn btn-sm btn-danger d-none" id="stop-btn" onclick="cancelLoadSensors()">
-          <i class="bi bi-stop-circle me-1"></i>Annulla
-        </button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Selezione multipla toolbar -->
-<div class="card mb-3 d-none" id="selection-toolbar">
-  <div class="card-body py-2 d-flex align-items-center gap-3">
-    <span class="text-warning">
-      <i class="bi bi-check2-square me-1"></i>
-      <strong id="sel-count">0</strong> entità selezionate
-    </span>
-    <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#quickPurgeModal">
-      <i class="bi bi-lightning me-1"></i>Esegui strategia rapida
-    </button>
-    <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="clearSelection()">
-      <i class="bi bi-x"></i> Deseleziona tutto
-    </button>
-  </div>
-</div>
-
-<!-- Tabella sensori -->
-<div class="card">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span><i class="bi bi-table me-1"></i>Elenco sensori</span>
-    <span class="badge bg-secondary" id="sensors-count">…</span>
-  </div>
-  <div class="card-body p-0">
-    <div class="table-responsive">
-      <table class="table table-hover table-sm mb-0" id="sensors-table">
-        <thead>
-          <tr>
-            <th style="width:36px">
-              <input type="checkbox" class="form-check-input" id="select-all"
-                     onchange="toggleSelectAll(this)">
-            </th>
-            <th>Entità</th>
-            <th>Dominio</th>
-            <th class="text-end">Record</th>
-            <th class="text-end">Barra</th>
-            <th class="text-end">Prima reg.</th>
-            <th class="text-end">Ultima reg.</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="sensors-body">
-          <tr><td colspan="8" class="text-center py-5 text-muted">
-            <div class="spinner-border spinner-border-sm me-2"></div>Caricamento…
-          </td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
-<!-- Modal strategia rapida -->
-<div class="modal fade" id="quickPurgeModal" tabindex="-1">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-lightning me-2"></i>Strategia rapida</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <div class="mb-3">
-          <label class="form-label">Strategia</label>
-          <select class="form-select" id="quick-strategy">
-            <option value="simple_purge">Purge Semplice — elimina tutto oltre N giorni</option>
-            <option value="temporal_decimation">Decimazione Temporale — 1/ora poi 1/giorno</option>
-            <option value="rolling_average">Media Mobile — sostituisce con medie (solo numerici)</option>
-            <option value="adaptive_purge">Purge Adattivo — multi-fascia personalizzabile</option>
-          </select>
-        </div>
-
-        <!-- Parametri dinamici per strategia -->
-        <div id="quick-params-simple" class="strategy-params">
-          <label class="form-label">Elimina record più vecchi di</label>
-          <div class="input-group">
-            <input type="number" class="form-control" id="q-simple-days" value="30" min="1">
-            <span class="input-group-text">giorni</span>
-          </div>
-        </div>
-        <div id="quick-params-temporal" class="strategy-params d-none">
-          <label class="form-label">Soglia appiattimento orario</label>
-          <div class="input-group mb-2">
-            <input type="number" class="form-control" id="q-temp-days" value="14" min="1">
-            <span class="input-group-text">giorni (giornaliero = 2×)</span>
-          </div>
-        </div>
-        <div id="quick-params-rolling" class="strategy-params d-none">
-          <label class="form-label">Applica media ai dati più vecchi di</label>
-          <div class="input-group mb-2">
-            <input type="number" class="form-control" id="q-roll-days" value="7" min="1">
-            <span class="input-group-text">giorni</span>
-          </div>
-          <div>
-            <label class="form-label">Granularità</label>
-            <select class="form-select" id="q-roll-gran">
-              <option value="hour">Oraria</option>
-              <option value="day">Giornaliera</option>
-            </select>
-          </div>
-        </div>
-        <div id="quick-params-adaptive" class="strategy-params d-none">
-          <div class="row g-2">
-            <div class="col-6 col-md-3">
-              <label class="form-label small">Appiatt. orario dopo</label>
-              <div class="input-group input-group-sm">
-                <input type="number" class="form-control" id="q-adp-t1" value="7" min="1">
-                <span class="input-group-text">gg</span>
-              </div>
-            </div>
-            <div class="col-6 col-md-3">
-              <label class="form-label small">Appiatt. giorn. dopo</label>
-              <div class="input-group input-group-sm">
-                <input type="number" class="form-control" id="q-adp-t2" value="30" min="1">
-                <span class="input-group-text">gg</span>
-              </div>
-            </div>
-            <div class="col-6 col-md-3">
-              <label class="form-label small">Eliminaz. dopo</label>
-              <div class="input-group input-group-sm">
-                <input type="number" class="form-control" id="q-adp-t3" value="365" min="1">
-                <span class="input-group-text">gg</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <hr>
-        <div class="d-flex align-items-center gap-3">
-          <div id="preview-result" class="flex-grow-1 small text-muted">
-            Premi "Anteprima" per stimare il numero di record che verranno modificati.
-          </div>
-          <button class="btn btn-sm btn-outline-secondary" onclick="runPreview()">
-            <i class="bi bi-eye me-1"></i>Anteprima
-          </button>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
-        <button type="button" class="btn btn-danger" onclick="executeQuickStrategy()">
-          <i class="bi bi-play-fill me-1"></i>Esegui ora
-        </button>
-      </div>
-    </div>
-  </div>
-</div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-let allSensors = [];
-let selectedIds = new Set();
-let sensorLoadController = null; // AbortController per cancellazione
-
-document.addEventListener('DOMContentLoaded', () => {
-  loadSensors();
-  // Aggiorna strategia params al cambio
-  document.getElementById('quick-strategy').addEventListener('change', updateQuickParams);
-  // Ricerca live
-  let debounce;
-  document.getElementById('search-input').addEventListener('input', () => {
-    clearTimeout(debounce);
-    debounce = setTimeout(loadSensors, 350);
-  });
-  document.getElementById('sort-select').addEventListener('change', loadSensors);
-  document.getElementById('limit-select').addEventListener('change', loadSensors);
-});
-
-async function loadSensors() {
-  const search = document.getElementById('search-input').value;
-  const sort = document.getElementById('sort-select').value;
-  const limit = document.getElementById('limit-select').value;
-  const tbody = document.getElementById('sensors-body');
-  
-  // Cancella richiesta precedente se in corso
-  if (sensorLoadController) {
-    sensorLoadController.abort();
-  }
-  
-  // Crea nuovo AbortController
-  sensorLoadController = new AbortController();
-  
-  // Mostra spinner e pulsante Stop
-  tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento…</td></tr>';
-  document.getElementById('load-btn').classList.add('d-none');
-  document.getElementById('stop-btn').classList.remove('d-none');
-  
-  try {
-    // PRIMA: carica lista entità veloce (DISTINCT, no GROUP BY)
-    const entities = await apiFetch(`${BASE_PATH}/api/sensors/list?search=${encodeURIComponent(search)}`, {
-      signal: sensorLoadController.signal
-    }).then(r => r.json());
-    
-    if (!entities.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-muted">Nessun sensore trovato</td></tr>';
-      return;
-    }
-    
-    // SECONDA: carica dati dettagliati con timeout 5sec/query
-    allSensors = [];
-    for (const ent of entities) {
-      if (sensorLoadController.signal.aborted) {
-        throw new Error('Caricamento annullato');
-      }
-      try {
-        const detail = await apiFetch(`${BASE_PATH}/api/sensors/${encodeURIComponent(ent.entity_id)}`, {
-          signal: sensorLoadController.signal
-        }).then(r => r.json()).catch(e => {
-          // Se timeout, ritorna solo entity_id
-          console.warn(`Timeout/errore per ${ent.entity_id}: ${e.message}`);
-          return { entity_id: ent.entity_id, record_count: 0, first_seen: null, last_seen: null };
-        });
-        allSensors.push(detail);
-      } catch (e) {
-        if (e.name === 'AbortError') throw e;
-        // Continua con prossima entità
-      }
-    }
-    
-    // Ordina e renderizza
-    if (sort === 'count') {
-      allSensors.sort((a,b) => (b.record_count || 0) - (a.record_count || 0));
-    } else {
-      allSensors.sort((a,b) => a.entity_id.localeCompare(b.entity_id));
-    }
-    allSensors = allSensors.slice(0, parseInt(limit));
-    
-    renderSensorsTable(allSensors);
-    document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
-  } catch(e) {
-    if (e.name === 'AbortError' || e.message === 'Caricamento annullato') {
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Caricamento annullato</td></tr>';
-    } else {
-      tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-danger">${e.message}</td></tr>`;
-    }
-  } finally {
-    // Nascondi pulsante Stop, mostra Aggiorna
-    document.getElementById('load-btn').classList.remove('d-none');
-    document.getElementById('stop-btn').classList.add('d-none');
-    sensorLoadController = null;
-  }
-}
-
-function cancelLoadSensors() {
-  if (sensorLoadController) {
-    sensorLoadController.abort();
-  }
-}
-
-function renderSensorsTable(sensors) {
-  const tbody = document.getElementById('sensors-body');
-  if (!sensors.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-muted">Nessun sensore trovato</td></tr>';
-    return;
-  }
-  const maxCount = sensors[0]?.record_count || 1;
-  tbody.innerHTML = sensors.map(s => {
-    const pct = Math.round(s.record_count / maxCount * 100);
-    const domain = s.entity_id.split('.')[0];
-    const checked = selectedIds.has(s.entity_id) ? 'checked' : '';
-    return `
-    <tr class="${checked ? 'table-active' : ''}" data-eid="${s.entity_id}">
-      <td>
-        <input type="checkbox" class="form-check-input row-check" ${checked}
-               onchange="toggleRow(this, '${s.entity_id}')">
-      </td>
-      <td><code class="entity-id">${s.entity_id}</code></td>
-      <td><span class="badge domain-badge domain-${domain}">${domain}</span></td>
-      <td class="text-end"><strong>${fmt(s.record_count)}</strong></td>
-      <td class="text-end" style="min-width:80px">
-        <div class="progress" style="height:6px;margin-top:7px">
-          <div class="progress-bar bg-info" style="width:${pct}%"></div>
-        </div>
-      </td>
-      <td class="text-end text-muted small">${fmtTs(s.first_seen)}</td>
-      <td class="text-end text-muted small">${fmtTs(s.last_seen)}</td>
-      <td class="text-end">
-        <a href="${BASE_PATH}/sensors/${encodeURIComponent(s.entity_id)}"
-           class="btn btn-xs btn-outline-primary" title="Dettaglio">
-          <i class="bi bi-zoom-in"></i>
-        </a>
-      </td>
-    </tr>`;
-  }).join('');
-}
-
-function toggleRow(cb, eid) {
-  if (cb.checked) selectedIds.add(eid);
-  else selectedIds.delete(eid);
-  updateSelectionToolbar();
-  const row = cb.closest('tr');
-  row.classList.toggle('table-active', cb.checked);
-}
-
-function toggleSelectAll(cb) {
-  document.querySelectorAll('.row-check').forEach(el => {
-    el.checked = cb.checked;
-    const eid = el.closest('tr').dataset.eid;
-    if (cb.checked) selectedIds.add(eid);
-    else selectedIds.delete(eid);
-    el.closest('tr').classList.toggle('table-active', cb.checked);
-  });
-  updateSelectionToolbar();
-}
-
-function clearSelection() {
-  selectedIds.clear();
-  document.querySelectorAll('.row-check').forEach(el => { el.checked = false; el.closest('tr').classList.remove('table-active'); });
-  document.getElementById('select-all').checked = false;
-  updateSelectionToolbar();
-}
-
-function updateSelectionToolbar() {
-  const toolbar = document.getElementById('selection-toolbar');
-  toolbar.classList.toggle('d-none', selectedIds.size === 0);
-  document.getElementById('sel-count').textContent = selectedIds.size;
-}
-
-function updateQuickParams() {
-  const val = document.getElementById('quick-strategy').value;
-  document.querySelectorAll('.strategy-params').forEach(el => el.classList.add('d-none'));
-  const map = {
-    simple_purge: 'quick-params-simple',
-    temporal_decimation: 'quick-params-temporal',
-    rolling_average: 'quick-params-rolling',
-    adaptive_purge: 'quick-params-adaptive',
-  };
-  document.getElementById(map[val])?.classList.remove('d-none');
-}
-
-function getQuickParams() {
-  const strategy = document.getElementById('quick-strategy').value;
-  const params = {};
-  if (strategy === 'simple_purge') {
-    params.older_than_days = parseInt(document.getElementById('q-simple-days').value, 10);
-  } else if (strategy === 'temporal_decimation') {
-    params.older_than_days = parseInt(document.getElementById('q-temp-days').value, 10);
-  } else if (strategy === 'rolling_average') {
-    params.older_than_days = parseInt(document.getElementById('q-roll-days').value, 10);
-    params.granularity = document.getElementById('q-roll-gran').value;
-  } else if (strategy === 'adaptive_purge') {
-    params.threshold_1_days = parseInt(document.getElementById('q-adp-t1').value, 10);
-    params.threshold_2_days = parseInt(document.getElementById('q-adp-t2').value, 10);
-    params.threshold_3_days = parseInt(document.getElementById('q-adp-t3').value, 10);
-    params.threshold_4_days = 36500;
-  }
-  return { strategy, params };
-}
-
-async function runPreview() {
-  const { strategy, params } = getQuickParams();
-  const entity_ids = [...selectedIds];
-  if (!entity_ids.length) { document.getElementById('preview-result').innerHTML = '<span class="text-warning">Seleziona almeno un sensore</span>'; return; }
-  try {
-    const result = await apiPost('/api/preview', { strategy_type: strategy, entity_ids, params });
-    const del = result.total_deleted ?? result.estimated_deleted ?? '?';
-    document.getElementById('preview-result').innerHTML =
-      `<span class="text-info"><i class="bi bi-info-circle me-1"></i>Stima: <strong>${fmt(del)}</strong> record eliminati/modificati su ${entity_ids.length} entità</span>`;
-  } catch(e) {
-    document.getElementById('preview-result').innerHTML = `<span class="text-danger">${e.message}</span>`;
-  }
-}
-
-async function executeQuickStrategy() {
-  const { strategy, params } = getQuickParams();
-  const entity_ids = [...selectedIds];
-  if (!entity_ids.length) { showToast('Seleziona almeno un sensore', 'warning'); return; }
-  if (!confirm(`Confermi l'esecuzione di "${strategy}" su ${entity_ids.length} entità?\nL'operazione non è reversibile (salvo backup).`)) return;
-  bootstrap.Modal.getInstance(document.getElementById('quickPurgeModal')).hide();
-  showToast('Esecuzione in corso…', 'info');
-  try {
-    const result = await apiPost('/api/execute', { strategy_type: strategy, entity_ids, params });
-    showToast(
-      result.error ? `Errore: ${result.error}` :
-      `Completato! ${fmt(result.total_deleted)} record eliminati in ${result.duration_sec}s`,
-      result.error ? 'danger' : 'success'
-    );
-    clearSelection();
-    loadSensors();
   } catch(e) {
     showToast(`Errore: ${e.message}`, 'danger');
   }
