@@ -203,7 +203,7 @@
         </div>
 
         <div class="d-flex gap-2 mt-3">
-          <button class="btn btn-primary" onclick="saveStrategy()">
+          <button class="btn btn-primary" id="save-strategy-btn" onclick="saveStrategy()">
             <i class="bi bi-save me-1"></i>Salva strategia
           </button>
           <button class="btn btn-outline-secondary" onclick="resetForm()">
@@ -215,9 +215,12 @@
 
     <!-- Strategie salvate -->
     <div class="card">
-      <div class="card-header">
-        <i class="bi bi-bookmark-check me-2"></i>Strategie salvate
-        <span class="badge bg-secondary ms-2">{{ saved_strategies|length }}</span>
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-bookmark-check me-2"></i>Strategie salvate
+        <span class="badge bg-secondary ms-2">{{ saved_strategies|length }}</span></span>
+        <button class="btn btn-xs btn-outline-danger d-none" id="bulk-delete-btn" onclick="bulkDelete()">
+          <i class="bi bi-trash me-1"></i>Elimina selezionate (<span id="bulk-count">0</span>)
+        </button>
       </div>
       <div id="saved-strategies-list">
         {% if not saved_strategies %}
@@ -229,7 +232,10 @@
         {% for s in saved_strategies %}
         <div class="strategy-item p-3 border-bottom border-secondary" id="strat-{{ s.id }}">
           <div class="d-flex justify-content-between align-items-start">
-            <div class="flex-grow-1">
+            <div class="d-flex align-items-start gap-2 flex-grow-1">
+              <input type="checkbox" class="form-check-input mt-1 strat-check" value="{{ s.id }}"
+                     onchange="updateBulkDelete()">
+              <div class="flex-grow-1">
               <div class="d-flex align-items-center gap-2 mb-1">
                 <strong>{{ s.name }}</strong>
                 <span class="badge bg-info text-dark small">{{ s.strategy_type }}</span>
@@ -251,13 +257,14 @@
                 {% endif %}
               </div>
             </div>
+            </div>
             <div class="d-flex gap-1 ms-2">
               <button class="btn btn-xs btn-outline-success"
                       onclick="executeSaved('{{ s.id }}')" title="Esegui">
                 <i class="bi bi-play-fill"></i>
               </button>
               <button class="btn btn-xs btn-outline-warning"
-                      onclick="editSaved({{ s|tojson|e }})" title="Modifica">
+                      onclick="editSavedById('{{ s.id }}')" title="Modifica">
                 <i class="bi bi-pencil"></i>
               </button>
               <button class="btn btn-xs btn-outline-danger"
@@ -277,19 +284,21 @@
 
 {% block scripts %}
 <script>
+// Mappa ID -> oggetto strategia (evita JSON inline negli onclick)
+const STRATEGIES_MAP = {
+  {% for s in saved_strategies %}"{{ s.id }}": {{ s|tojson }}{% if not loop.last %},{% endif %}
+  {% endfor %}
+};
+
 let selectedEntities = [];
 let allSensorsList = [];
+let sensorSearchController = null;
 const pageController = new AbortController();
 window.addEventListener('beforeunload', () => pageController.abort());
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   updateFormParams();
-  try {
-    allSensorsList = await apiFetch('/api/sensors/list', { signal: pageController.signal });
-    setupEntitySearch();
-  } catch(e) {
-    if (e.name !== 'AbortError') console.error('[HistoLite] Errore caricamento sensori:', e);
-  }
+  setupEntitySearch();
 });
 
 function updateFormParams() {
@@ -316,21 +325,33 @@ function setupEntitySearch() {
   const input = document.getElementById('f-entity-input');
   const suggestions = document.getElementById('entity-suggestions');
 
-  input.addEventListener('input', () => {
+  input.addEventListener('input', async () => {
     const q = input.value.trim().toLowerCase();
     if (q.length < 2) { suggestions.classList.add('d-none'); return; }
-    const matches = allSensorsList
-      .filter(s => s.entity_id.toLowerCase().includes(q) && !selectedEntities.includes(s.entity_id))
-      .slice(0, 8);
-    if (!matches.length) { suggestions.classList.add('d-none'); return; }
-    suggestions.innerHTML = matches.map(s =>
-      `<button type="button" class="list-group-item list-group-item-action list-group-item-dark py-1 small"
-               onclick="addEntity('${s.entity_id}')">
-         <code>${s.entity_id}</code>
-         <span class="badge bg-secondary float-end">${s.record_count ? fmt(s.record_count) : ''}</span>
-       </button>`
-    ).join('');
-    suggestions.classList.remove('d-none');
+
+    // Carica lista sensori on-demand al primo utilizzo o cerca live
+    if (sensorSearchController) sensorSearchController.abort();
+    sensorSearchController = new AbortController();
+    try {
+      const results = await apiFetch(
+        `/api/sensors/list?search=${encodeURIComponent(q)}`,
+        { signal: sensorSearchController.signal, timeout: 15000 }
+      );
+      const matches = (results || []).filter(s => !selectedEntities.includes(s.entity_id)).slice(0, 8);
+      if (!matches.length) { suggestions.classList.add('d-none'); return; }
+      suggestions.innerHTML = matches.map(s =>
+        `<button type="button" class="list-group-item list-group-item-action list-group-item-dark py-1 small"
+                 onclick="addEntity('${s.entity_id}')">
+           <code>${s.entity_id}</code>
+         </button>`
+      ).join('');
+      suggestions.classList.remove('d-none');
+    } catch(e) {
+      if (e.name !== 'AbortError' && e.name !== 'TimeoutError') {
+        suggestions.innerHTML = `<div class="list-group-item text-danger small">${e.message}</div>`;
+        suggestions.classList.remove('d-none');
+      }
+    }
   });
 
   document.addEventListener('click', e => {
@@ -402,24 +423,28 @@ function getFormParams() {
 }
 
 async function saveStrategy() {
-  const name = document.getElementById('f-name').value.trim();
-  if (!name) { showToast('Inserisci un nome per la strategia', 'warning'); return; }
-  const scheduleTime = document.getElementById('f-schedule-time').value.trim();
-  const payload = {
-    id: document.getElementById('edit-id').value || '',
-    name,
-    strategy_type: document.getElementById('f-type').value,
-    entity_ids: [...selectedEntities],
-    params: getFormParams(),
-    schedule_time: scheduleTime || null,
-  };
+  const btn = document.getElementById('save-strategy-btn');
   try {
+    const name = document.getElementById('f-name').value.trim();
+    if (!name) { showToast('Inserisci un nome per la strategia', 'warning'); return; }
+    const scheduleTime = document.getElementById('f-schedule-time').value.trim();
+    const payload = {
+      id: document.getElementById('edit-id').value || '',
+      name,
+      strategy_type: document.getElementById('f-type').value,
+      entity_ids: [...selectedEntities],
+      params: getFormParams(),
+      schedule_time: scheduleTime || null,
+    };
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Salvataggio...'; }
     const result = await apiPost('/api/strategies', payload);
     showToast(`Strategia "${name}" salvata!`, 'success');
     resetForm();
     setTimeout(() => location.reload(), 800);
   } catch(e) {
-    showToast('Errore: ' + e.message, 'danger');
+    showToast('Errore salvataggio: ' + e.message, 'danger');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-save me-1"></i>Salva strategia'; }
   }
 }
 
@@ -430,6 +455,12 @@ function resetForm() {
   selectedEntities = [];
   renderEntityTags();
   document.getElementById('form-title').textContent = 'Nuova strategia';
+}
+
+function editSavedById(id) {
+  const s = STRATEGIES_MAP[id];
+  if (!s) { showToast('Strategia non trovata', 'danger'); return; }
+  editSaved(s);
 }
 
 function editSaved(s) {
@@ -472,6 +503,28 @@ async function deleteSaved(id) {
     await apiFetch(`/api/strategies/${id}`, { method: 'DELETE' });
     document.getElementById(`strat-${id}`)?.remove();
     showToast('Strategia eliminata', 'success');
+  } catch(e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+function updateBulkDelete() {
+  const checked = document.querySelectorAll('.strat-check:checked');
+  const btn = document.getElementById('bulk-delete-btn');
+  document.getElementById('bulk-count').textContent = checked.length;
+  btn.classList.toggle('d-none', checked.length === 0);
+}
+
+async function bulkDelete() {
+  const checked = [...document.querySelectorAll('.strat-check:checked')];
+  if (!checked.length) return;
+  if (!confirm(`Eliminare ${checked.length} strategie selezionate?`)) return;
+  const ids = checked.map(el => el.value);
+  try {
+    const result = await apiPost('/api/strategies/bulk-delete', { ids });
+    showToast(`Eliminate ${result.deleted} strategie`, 'success');
+    ids.forEach(id => document.getElementById(`strat-${id}`)?.remove());
+    updateBulkDelete();
   } catch(e) {
     showToast('Errore: ' + e.message, 'danger');
   }

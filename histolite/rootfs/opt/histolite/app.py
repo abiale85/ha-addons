@@ -486,6 +486,22 @@ def api_delete_strategy(strategy_id):
     return jsonify({"error": "Strategia non trovata"}), 404
 
 
+@app.route("/api/strategies/bulk-delete", methods=["POST"])
+def api_bulk_delete_strategies():
+    """Elimina multiple strategie per ID."""
+    try:
+        data = request.get_json(force=True)
+        ids = data.get("ids", [])
+        deleted = 0
+        for sid in ids:
+            if config_manager.delete_strategy(sid):
+                deleted += 1
+        return jsonify({"deleted": deleted})
+    except Exception as e:
+        logger.error(f"Errore bulk-delete strategie: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # ---------------------------------------------------------------------------
 # API - Esecuzione
 # ---------------------------------------------------------------------------
