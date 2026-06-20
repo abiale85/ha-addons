@@ -185,6 +185,18 @@ def api_sensors():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/sensors/list")
+def api_sensors_list():
+    """Endpoint veloce - senza COUNT/GROUP BY. Carica pagina sensori velocemente."""
+    try:
+        search = request.args.get("search", "")
+        entities = db.get_entity_list(search=search)
+        return jsonify(entities)
+    except Exception as e:
+        logger.error(f"Errore api/sensors/list: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/sensors/<path:entity_id>")
 def api_sensor_detail(entity_id):
     try:

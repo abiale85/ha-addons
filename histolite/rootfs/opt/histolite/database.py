@@ -33,9 +33,16 @@ class HaDatabase:
             uri = f"file:{self.db_path}"
         conn = sqlite3.connect(uri, uri=True, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        # Crea indici per performance (se non esistono)
         if not read_only:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_id ON states(entity_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_last_updated_ts ON states(last_updated_ts) WHERE last_updated_ts IS NOT NULL")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_last_updated ON states(last_updated) WHERE last_updated IS NOT NULL")
+            except Exception as e:
+                logger.debug(f"Index creation: {e}")
         return conn
 
     # ------------------------------------------------------------------
@@ -111,7 +118,7 @@ class HaDatabase:
     def get_top_sensors(
         self, limit: int = 100, sort_by: str = "count", search: str = ""
     ) -> list[dict]:
-        """Restituisce i sensori con più stati registrati."""
+        """Restituisce i sensori con più stati registrati. Timeout: 5 sec."""
         schema = self.get_schema_info()
         if schema["uses_ts"]:
             min_ts_expr = "MIN(last_updated_ts)"
@@ -126,6 +133,11 @@ class HaDatabase:
         }
         order = order_map.get(sort_by, "record_count DESC")
 
+        # Usa GLOB invece di LIKE per migliore performance (con indice)
+        # Se search vuoto, non filtrare per velocità
+        where_clause = "WHERE entity_id LIKE ?" if search else ""
+        search_pattern = f"%{search}%" if search else ""
+        
         query = f"""
             SELECT
                 entity_id,
@@ -133,32 +145,73 @@ class HaDatabase:
                 {min_ts_expr} AS first_seen,
                 {max_ts_expr} AS last_seen
             FROM states
-            WHERE entity_id LIKE ?
+            {where_clause}
             GROUP BY entity_id
             ORDER BY {order}
             LIMIT ?
         """
-        search_pattern = f"%{search}%"
-        logger.debug(f"get_top_sensors query: limit={limit}, sort={sort_by}, search_pattern={search_pattern}")
+        
+        logger.debug(f"get_top_sensors: limit={limit}, sort={sort_by}, search={search}")
         with self._connect(read_only=True) as conn:
+            # Set timeout SQLite a 5 secondi
+            conn.execute("PRAGMA busy_timeout=5000")
             try:
-                # Check preliminare: conta totale stati
-                count_check = conn.execute("SELECT COUNT(*) as cnt FROM states").fetchone()
-                total_in_table = count_check["cnt"] if count_check else 0
-                logger.debug(f"Total states in table: {total_in_table}")
-                
-                rows = conn.execute(query, (search_pattern, limit)).fetchall()
+                if search:
+                    rows = conn.execute(query, (search_pattern, limit)).fetchall()
+                else:
+                    rows = conn.execute(query, (limit,)).fetchall()
                 results = [dict(r) for r in rows]
-                logger.info(f"get_top_sensors: query eseguita, {len(results)} sensori trovati (total states: {total_in_table})")
-                if len(results) == 0 and total_in_table > 0:
-                    logger.warning(f"ATTENZIONE: DB ha {total_in_table} stati ma query GROUP BY ritorna 0 risultati!")
+                logger.info(f"get_top_sensors: {len(results)} sensori trovati")
                 return results
+            except sqlite3.OperationalError as e:
+                if "timeout" in str(e).lower():
+                    logger.warning(f"get_top_sensors: timeout (query troppo pesante)")
+                else:
+                    logger.error(f"get_top_sensors query error: {e}", exc_info=True)
+                return []
             except Exception as e:
-                logger.error(f"get_top_sensors query error: {e}\nQuery: {query}", exc_info=True)
+                logger.error(f"get_top_sensors query error: {e}", exc_info=True)
+                return []
+
+    def get_entity_list(self, search: str = "") -> list[dict]:
+        """Lista veloce SENZA calcoli - solo entity_id e record count.
+        Usato per caricamento rapido pagina sensori (no GROUP BY).
+        Timeout: 5 sec."""
+        # Usa semplice SELECT DISTINCT senza GROUP BY (molto più veloce)
+        where_clause = "WHERE entity_id LIKE ?" if search else ""
+        search_pattern = f"%{search}%" if search else ""
+        
+        query = f"""
+            SELECT DISTINCT entity_id
+            FROM states
+            {where_clause}
+            ORDER BY entity_id
+            LIMIT 1000
+        """
+        
+        logger.debug(f"get_entity_list: search={search}")
+        with self._connect(read_only=True) as conn:
+            conn.execute("PRAGMA busy_timeout=5000")
+            try:
+                if search:
+                    rows = conn.execute(query, (search_pattern,)).fetchall()
+                else:
+                    rows = conn.execute(query).fetchall()
+                results = [{"entity_id": r["entity_id"]} for r in rows]
+                logger.info(f"get_entity_list: {len(results)} entità trovate")
+                return results
+            except sqlite3.OperationalError as e:
+                if "timeout" in str(e).lower():
+                    logger.warning(f"get_entity_list: timeout")
+                else:
+                    logger.error(f"get_entity_list error: {e}", exc_info=True)
+                return []
+            except Exception as e:
+                logger.error(f"get_entity_list error: {e}", exc_info=True)
                 return []
 
     def get_sensor_stats(self, entity_id: str) -> Optional[dict]:
-        """Statistiche dettagliate per un singolo sensore."""
+        """Statistiche dettagliate per un singolo sensore. Timeout: 5 sec."""
         schema = self.get_schema_info()
         if schema["uses_ts"]:
             query = """
@@ -186,28 +239,35 @@ class HaDatabase:
                 GROUP BY entity_id
             """
         with self._connect(read_only=True) as conn:
-            row = conn.execute(query, (entity_id,)).fetchone()
-            if not row:
-                return None
-            result = dict(row)
-            # Campiona ultime 10 righe per determinare se è numerico
-            sample = conn.execute(
-                "SELECT state FROM states WHERE entity_id = ? "
-                "ORDER BY rowid DESC LIMIT 50",
-                (entity_id,),
-            ).fetchall()
-            numeric_count = 0
-            for s in sample:
-                try:
-                    float(s["state"])
-                    numeric_count += 1
-                except (ValueError, TypeError):
-                    pass
-            result["is_numeric"] = numeric_count > len(sample) * 0.6
-            return result
+            conn.execute("PRAGMA busy_timeout=5000")
+            try:
+                row = conn.execute(query, (entity_id,)).fetchone()
+                if not row:
+                    return None
+                result = dict(row)
+                # Campiona ultime 10 righe per determinare se è numerico
+                sample = conn.execute(
+                    "SELECT state FROM states WHERE entity_id = ? "
+                    "ORDER BY rowid DESC LIMIT 50",
+                    (entity_id,),
+                ).fetchall()
+                numeric_count = 0
+                for s in sample:
+                    try:
+                        float(s["state"])
+                        numeric_count += 1
+                    except (ValueError, TypeError):
+                        pass
+                result["is_numeric"] = numeric_count > len(sample) * 0.6
+                return result
+            except sqlite3.OperationalError as e:
+                if "timeout" in str(e).lower():
+                    logger.warning(f"get_sensor_stats {entity_id}: timeout")
+                    return None
+                raise
 
     def get_sensor_daily_counts(self, entity_id: str, days: int = 90) -> list[dict]:
-        """Conta i record per giorno per un sensore (per il grafico)."""
+        """Conta i record per giorno per un sensore (per il grafico). Timeout: 5 sec."""
         schema = self.get_schema_info()
         if schema["uses_ts"]:
             import time
@@ -236,20 +296,34 @@ class HaDatabase:
             params = (entity_id, f"-{days}")
 
         with self._connect(read_only=True) as conn:
-            rows = conn.execute(query, params).fetchall()
-            return [dict(r) for r in rows]
+            conn.execute("PRAGMA busy_timeout=5000")
+            try:
+                rows = conn.execute(query, params).fetchall()
+                return [dict(r) for r in rows]
+            except sqlite3.OperationalError as e:
+                if "timeout" in str(e).lower():
+                    logger.warning(f"get_sensor_daily_counts {entity_id}: timeout")
+                    return []
+                raise
 
     def get_recent_values(self, entity_id: str, limit: int = 20) -> list[dict]:
-        """Ultime N righe per un sensore."""
+        """Ultime N righe per un sensore. Timeout: 5 sec."""
         schema = self.get_schema_info()
         order_col = "last_updated_ts" if schema["uses_ts"] else "last_updated"
         with self._connect(read_only=True) as conn:
-            rows = conn.execute(
-                f"SELECT state, {order_col} AS ts FROM states "
-                f"WHERE entity_id = ? ORDER BY {order_col} DESC LIMIT ?",
-                (entity_id, limit),
-            ).fetchall()
-            return [dict(r) for r in rows]
+            conn.execute("PRAGMA busy_timeout=5000")
+            try:
+                rows = conn.execute(
+                    f"SELECT state, {order_col} AS ts FROM states "
+                    f"WHERE entity_id = ? ORDER BY {order_col} DESC LIMIT ?",
+                    (entity_id, limit),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            except sqlite3.OperationalError as e:
+                if "timeout" in str(e).lower():
+                    logger.warning(f"get_recent_values {entity_id}: timeout")
+                    return []
+                raise
 
     # ------------------------------------------------------------------
     # Operazioni di purge

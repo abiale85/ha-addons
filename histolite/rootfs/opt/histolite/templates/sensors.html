@@ -29,8 +29,11 @@
         </select>
       </div>
       <div class="col-md-2 text-end">
-        <button class="btn btn-sm btn-primary" onclick="loadSensors()">
+        <button class="btn btn-sm btn-primary" id="load-btn" onclick="loadSensors()">
           <i class="bi bi-arrow-clockwise me-1"></i>Aggiorna
+        </button>
+        <button class="btn btn-sm btn-danger d-none" id="stop-btn" onclick="cancelLoadSensors()">
+          <i class="bi bi-stop-circle me-1"></i>Annulla
         </button>
       </div>
     </div>
@@ -186,6 +189,7 @@
 <script>
 let allSensors = [];
 let selectedIds = new Set();
+let sensorLoadController = null; // AbortController per cancellazione
 
 document.addEventListener('DOMContentLoaded', () => {
   loadSensors();
@@ -206,13 +210,79 @@ async function loadSensors() {
   const sort = document.getElementById('sort-select').value;
   const limit = document.getElementById('limit-select').value;
   const tbody = document.getElementById('sensors-body');
+  
+  // Cancella richiesta precedente se in corso
+  if (sensorLoadController) {
+    sensorLoadController.abort();
+  }
+  
+  // Crea nuovo AbortController
+  sensorLoadController = new AbortController();
+  
+  // Mostra spinner e pulsante Stop
   tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento…</td></tr>';
+  document.getElementById('load-btn').classList.add('d-none');
+  document.getElementById('stop-btn').classList.remove('d-none');
+  
   try {
-    allSensors = await apiGet(`/api/sensors?limit=${limit}&sort=${sort}&search=${encodeURIComponent(search)}`);
+    // PRIMA: carica lista entità veloce (DISTINCT, no GROUP BY)
+    const entities = await apiFetch(`${BASE_PATH}/api/sensors/list?search=${encodeURIComponent(search)}`, {
+      signal: sensorLoadController.signal
+    }).then(r => r.json());
+    
+    if (!entities.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-muted">Nessun sensore trovato</td></tr>';
+      return;
+    }
+    
+    // SECONDA: carica dati dettagliati con timeout 5sec/query
+    allSensors = [];
+    for (const ent of entities) {
+      if (sensorLoadController.signal.aborted) {
+        throw new Error('Caricamento annullato');
+      }
+      try {
+        const detail = await apiFetch(`${BASE_PATH}/api/sensors/${encodeURIComponent(ent.entity_id)}`, {
+          signal: sensorLoadController.signal
+        }).then(r => r.json()).catch(e => {
+          // Se timeout, ritorna solo entity_id
+          console.warn(`Timeout/errore per ${ent.entity_id}: ${e.message}`);
+          return { entity_id: ent.entity_id, record_count: 0, first_seen: null, last_seen: null };
+        });
+        allSensors.push(detail);
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        // Continua con prossima entità
+      }
+    }
+    
+    // Ordina e renderizza
+    if (sort === 'count') {
+      allSensors.sort((a,b) => (b.record_count || 0) - (a.record_count || 0));
+    } else {
+      allSensors.sort((a,b) => a.entity_id.localeCompare(b.entity_id));
+    }
+    allSensors = allSensors.slice(0, parseInt(limit));
+    
     renderSensorsTable(allSensors);
     document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
   } catch(e) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-danger">${e.message}</td></tr>`;
+    if (e.name === 'AbortError' || e.message === 'Caricamento annullato') {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Caricamento annullato</td></tr>';
+    } else {
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-danger">${e.message}</td></tr>`;
+    }
+  } finally {
+    // Nascondi pulsante Stop, mostra Aggiorna
+    document.getElementById('load-btn').classList.remove('d-none');
+    document.getElementById('stop-btn').classList.add('d-none');
+    sensorLoadController = null;
+  }
+}
+
+function cancelLoadSensors() {
+  if (sensorLoadController) {
+    sensorLoadController.abort();
   }
 }
 
