@@ -10,7 +10,6 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
-from werkzeug.wsgi import DispatcherMiddleware
 
 from database import HaDatabase
 from analyzer import get_db_overview, analyze_sensor
