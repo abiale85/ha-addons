@@ -54,7 +54,7 @@ class HaDatabase:
                 "uses_ts": uses_ts,
                 "has_attributes_id": has_attributes_id,
                 "timestamp_col": "last_updated_ts" if uses_ts else "last_updated",
-                "columns": cols,
+                "columns": list(cols),
             }
         return self._schema
 
