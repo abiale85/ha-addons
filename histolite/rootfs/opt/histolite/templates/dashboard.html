@@ -39,6 +39,18 @@
   </div>
 </div>
 
+<!-- Timestamp aggiornamento e bottone refresh -->
+<div class="mb-3 d-flex justify-content-between align-items-center small">
+  <span class="text-muted">
+    <i class="bi bi-clock-history me-1"></i>
+    Ultimo aggiornamento: <span id="last-updated" class="text-info">—</span>
+    <span id="cache-badge" class="badge bg-secondary ms-2" style="display:none;">Cached</span>
+  </span>
+  <button class="btn btn-sm btn-outline-info" id="refresh-btn" onclick="refreshOverview()" disabled>
+    <i class="bi bi-arrow-clockwise me-1"></i>Aggiorna
+  </button>
+</div>
+
 <div class="row g-3 mb-4">
   <!-- Top sensori -->
   <div class="col-lg-8">
@@ -179,6 +191,19 @@ async function loadDashboard() {
     // Top 10 table
     renderTop10Table(top);
 
+    // Timestamp aggiornamento
+    if (data.updated_timestamp) {
+      const d = new Date(data.updated_timestamp * 1000);
+      const fmt_ts = d.toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+      document.getElementById('last-updated').textContent = fmt_ts;
+      if (data.cached) {
+        document.getElementById('cache-badge').style.display = 'inline';
+      } else {
+        document.getElementById('cache-badge').style.display = 'none';
+      }
+    }
+    document.getElementById('refresh-btn').disabled = false;
+
   } catch(e) {
     console.error('[HistoLite] Errore loadDashboard:', e);
     const errMsg = `<span class="text-danger small">⚠ ${e.message}</span>`;
@@ -292,6 +317,41 @@ async function purgeStatistics() {
     );
   } catch(e) {
     showToast(`Errore: ${e.message}`, 'danger');
+  }
+}
+
+async function refreshOverview() {
+  document.getElementById('refresh-btn').disabled = true;
+  try {
+    showToast('Aggiornamento dati in corso...', 'info');
+    const data = await apiPost('/api/overview/refresh', {});
+    if (data.error) {
+      showToast(`Errore: ${data.error}`, 'danger');
+      return;
+    }
+    
+    // Ricariça la dashboard con i nuovi dati
+    document.getElementById('kpi-states').textContent = fmt(data.total_states);
+    document.getElementById('kpi-size').textContent = data.db_size_human;
+    document.getElementById('kpi-sensors').textContent = fmt(data.table_counts?.states ? data.top_sensors?.length : '?');
+    document.getElementById('kpi-top10').textContent = data.top_10_pct + '%';
+    
+    const top = data.top_sensors || [];
+    renderBarChart('topSensorsChart', top);
+    renderTableDist('tableDistChart', data.table_counts);
+    renderTop10Table(top);
+    
+    // Aggiorna timestamp
+    const d = new Date(data.updated_timestamp * 1000);
+    const fmt_ts = d.toLocaleTimeString('it-IT', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+    document.getElementById('last-updated').textContent = fmt_ts;
+    document.getElementById('cache-badge').style.display = 'none';
+    
+    showToast('Dati aggiornati', 'success');
+  } catch(e) {
+    showToast(`Errore refresh: ${e.message}`, 'danger');
+  } finally {
+    document.getElementById('refresh-btn').disabled = false;
   }
 }
 </script>

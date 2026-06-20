@@ -139,11 +139,23 @@ class HaDatabase:
             LIMIT ?
         """
         search_pattern = f"%{search}%"
+        logger.debug(f"get_top_sensors query: limit={limit}, sort={sort_by}, search_pattern={search_pattern}")
         with self._connect(read_only=True) as conn:
-            rows = conn.execute(query, (search_pattern, limit)).fetchall()
-            results = [dict(r) for r in rows]
-            logger.debug(f"get_top_sensors: trovati {len(results)} sensori con pattern '{search}'")
-            return results
+            try:
+                # Check preliminare: conta totale stati
+                count_check = conn.execute("SELECT COUNT(*) as cnt FROM states").fetchone()
+                total_in_table = count_check["cnt"] if count_check else 0
+                logger.debug(f"Total states in table: {total_in_table}")
+                
+                rows = conn.execute(query, (search_pattern, limit)).fetchall()
+                results = [dict(r) for r in rows]
+                logger.info(f"get_top_sensors: query eseguita, {len(results)} sensori trovati (total states: {total_in_table})")
+                if len(results) == 0 and total_in_table > 0:
+                    logger.warning(f"ATTENZIONE: DB ha {total_in_table} stati ma query GROUP BY ritorna 0 risultati!")
+                return results
+            except Exception as e:
+                logger.error(f"get_top_sensors query error: {e}\nQuery: {query}", exc_info=True)
+                return []
 
     def get_sensor_stats(self, entity_id: str) -> Optional[dict]:
         """Statistiche dettagliate per un singolo sensore."""

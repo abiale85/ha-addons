@@ -15,13 +15,15 @@ def get_db_overview(db: HaDatabase) -> dict:
         db_size = db.get_db_size()
         table_counts = db.get_table_counts()
         schema = db.get_schema_info()
+        
+        total_states = table_counts.get("states", 0)
+        logger.info(f"DB overview: total_states={total_states}, schema={schema['timestamp_col']}")
+        
         top_sensors = db.get_top_sensors(limit=10)
-
         logger.info(f"Top sensori recuperati: {len(top_sensors)} risultati")
         if top_sensors:
             logger.debug(f"Primi sensori: {[s['entity_id'] for s in top_sensors[:3]]}")
 
-        total_states = table_counts.get("states", 0)
         top_10_states = sum(s["record_count"] for s in top_sensors)
         top_10_pct = (top_10_states / total_states * 100) if total_states > 0 else 0
 

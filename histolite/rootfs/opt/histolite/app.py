@@ -14,6 +14,7 @@ from database import HaDatabase
 from analyzer import get_db_overview, analyze_sensor
 from strategies import execute_strategy, STRATEGY_LIST
 from config_manager import ConfigManager
+from cache_manager import CacheManager
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -46,6 +47,7 @@ CORS(app)
 
 db = HaDatabase(DB_PATH)
 config_manager = ConfigManager(DATA_PATH)
+cache = CacheManager(DATA_PATH)
 
 logger.info(f"HistoLite avviato - DB: {DB_PATH} - Port: {PORT} - Ingress: {INGRESS_PATH or '(nessuno)'}")
 
@@ -121,11 +123,48 @@ def jobs_page():
 
 @app.route("/api/overview")
 def api_overview():
+    """Ritorna panoramica DB con cache (TTL 5min) e timestamp aggiornamento."""
     try:
+        # Controlla cache
+        cached = cache.get_with_metadata("overview")
+        if cached:
+            data = cached["value"]
+            data["cached"] = True
+            data["updated_timestamp"] = int(cached["timestamp_updated"])
+            data["age_seconds"] = int(cached["age_seconds"])
+            logger.info(f"Ritornando overview da cache (eta {cached['age_seconds']:.0f}s)")
+            return jsonify(data)
+
+        # Cache scaduto o assente -> ricalcola
+        logger.info("Cache overview scaduto, ricalcolando...")
         data = get_db_overview(db)
+        if "error" not in data:
+            # TTL 5 minuti (300 secondi)
+            cache.set("overview", data, ttl_seconds=300)
+            data["cached"] = False
+            data["updated_timestamp"] = int(time.time())
+            data["age_seconds"] = 0
         return jsonify(data)
     except Exception as e:
         logger.error(f"Errore api/overview: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/overview/refresh", methods=["POST"])
+def api_overview_refresh():
+    """Forza il ricalcolo dell'overview, invalidando la cache."""
+    try:
+        cache.invalidate("overview")
+        logger.info("Cache overview invalidato, ricalcolando...")
+        data = get_db_overview(db)
+        if "error" not in data:
+            cache.set("overview", data, ttl_seconds=300)
+            data["cached"] = False
+            data["updated_timestamp"] = int(time.time())
+            data["age_seconds"] = 0
+        return jsonify(data)
+    except Exception as e:
+        logger.error(f"Errore refresh overview: {e}")
         return jsonify({"error": str(e)}), 500
 
 
