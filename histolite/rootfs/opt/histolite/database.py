@@ -146,9 +146,15 @@ class HaDatabase:
             return None
 
     def _use_meta_schema(self) -> bool:
-        """True se il DB usa il nuovo schema con states_meta (entity_id separato)."""
+        """True se il DB usa il nuovo schema con states_meta (entity_id separato).
+        
+        Include anche 'transitional': in HA recorder v23+ la migrazione mantiene
+        ENTRAMBE le colonne (entity_id + metadata_id) ma usa states_meta come
+        sorgente autoritativa. Trattare transitional come legacy causerebbe
+        query su entity_id = NULL → sensori vuoti e falsi 22M record "corrotti".
+        """
         schema = self.get_schema_info()
-        return schema.get("schema_type") == "modern"
+        return schema.get("schema_type") in ("modern", "transitional")
 
     def _validate_schema_for_write(self) -> None:
         """Verifica che lo schema sia riconosciuto prima di qualsiasi scrittura.
@@ -964,20 +970,26 @@ class HaDatabase:
         """
         Conta (dry_run) o elimina i record dalla tabella states corrotti:
         - Schema legacy: entity_id IS NULL o vuoto
-        - Nuovo schema (states_meta): metadata_id IS NULL o orfano (non in states_meta)
+        - Schema modern/transitional: metadata_id IS NULL o orfano (non in states_meta)
+        
+        NOTA: schema 'transitional' (HA recorder v23, entrambe le colonne presenti)
+        viene trattato come modern perché entity_id è NULL per i record nuovi.
         """
         self._validate_schema_for_write()
         use_meta = self._use_meta_schema()
+        schema_type = self.get_schema_info().get("schema_type", "legacy")
+        
         with self._connect(read_only=dry_run) as conn:
             try:
                 if use_meta:
-                    # Nel nuovo schema: record con metadata_id NULL o non in states_meta
+                    # Schema modern o transitional: record senza metadata_id valido
                     count_row = conn.execute(
                         "SELECT COUNT(*) AS c FROM states "
                         "WHERE metadata_id IS NULL "
                         "OR metadata_id NOT IN (SELECT metadata_id FROM states_meta)"
                     ).fetchone()
                 else:
+                    # Schema legacy puro: record senza entity_id
                     count_row = conn.execute(
                         "SELECT COUNT(*) AS c FROM states "
                         "WHERE entity_id IS NULL OR entity_id = ''"
@@ -1014,7 +1026,7 @@ class HaDatabase:
                         "DELETE FROM states WHERE entity_id IS NULL OR entity_id = ''"
                     )
                 conn.commit()
-                logger.info(f"cleanup_null_entities: {count} record eliminati")
+                logger.info(f"cleanup_null_entities: {count} record eliminati (schema: {schema_type})")
                 return {"deleted": count, "estimated": count, "dry_run": False}
             except Exception as e:
                 logger.error(f"cleanup_null_entities error: {e}", exc_info=True)
