@@ -44,8 +44,8 @@ async function apiFetch(path, options = {}) {
   }
 }
 
-async function apiGet(path) {
-  return apiFetch(path, { method: 'GET' });
+async function apiGet(path, options = {}) {
+  return apiFetch(path, { method: 'GET', ...options });
 }
 
 async function apiPost(path, body) {

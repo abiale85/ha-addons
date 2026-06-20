@@ -245,8 +245,12 @@ class HaDatabase:
                 LIMIT ?
             """
         else:
-            # Schema legacy: entity_id direttamente in states
-            where_clause = "WHERE entity_id LIKE ?" if search else ""
+            # Schema legacy/transitional: entity_id direttamente in states
+            # Filtra entity_id IS NOT NULL (record transitional con solo metadata_id)
+            if search:
+                where_clause = "WHERE entity_id IS NOT NULL AND entity_id != '' AND entity_id LIKE ?"
+            else:
+                where_clause = "WHERE entity_id IS NOT NULL AND entity_id != ''"
             query = f"""
                 SELECT
                     entity_id,
@@ -261,7 +265,7 @@ class HaDatabase:
             """
 
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA busy_timeout=30000")  # attendi fino a 30s per lock DB
             try:
                 if search:
                     rows = conn.execute(query, (search_pattern, limit)).fetchall()
@@ -271,10 +275,7 @@ class HaDatabase:
                 logger.info(f"get_top_sensors: {len(results)} sensori trovati")
                 return results
             except sqlite3.OperationalError as e:
-                if "timeout" in str(e).lower():
-                    logger.warning(f"get_top_sensors: timeout (query troppo pesante)")
-                else:
-                    logger.error(f"get_top_sensors query error: {e}", exc_info=True)
+                logger.error(f"get_top_sensors query error: {e}", exc_info=True)
                 return []
             except Exception as e:
                 logger.error(f"get_top_sensors query error: {e}", exc_info=True)

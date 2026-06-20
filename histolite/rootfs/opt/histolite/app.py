@@ -86,8 +86,9 @@ def _overview_scheduler():
         _run_overview_bg()
 
 # Calcolo iniziale al boot + scheduler periodico overview
-threading.Thread(target=_run_overview_bg, name="overview-boot", daemon=True).start()
-threading.Thread(target=_overview_scheduler, name="overview-scheduler", daemon=True).start()
+# RIMOSSO: le statistiche sono calcolate solo on-demand (click utente)
+# threading.Thread(target=_run_overview_bg, name="overview-boot", daemon=True).start()
+# threading.Thread(target=_overview_scheduler, name="overview-scheduler", daemon=True).start()
 
 # ---------------------------------------------------------------------------
 # Strategy scheduler - esecuzione pianificata serializzata
