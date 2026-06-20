@@ -45,6 +45,9 @@
     <i class="bi bi-clock-history me-1"></i>
     Ultimo aggiornamento: <span id="last-updated" class="text-info">—</span>
     <span id="cache-badge" class="badge bg-secondary ms-2" style="display:none;">Cached</span>
+    <span id="computing-badge" class="badge bg-warning text-dark ms-2" style="display:none;">
+      <span class="spinner-border spinner-border-sm me-1" style="width:.65rem;height:.65rem;"></span>In calcolo…
+    </span>
   </span>
   <button class="btn btn-sm btn-outline-info" id="refresh-btn" onclick="refreshOverview()" disabled>
     <i class="bi bi-arrow-clockwise me-1"></i>Aggiorna
@@ -189,7 +192,7 @@ async function loadDashboard() {
         '<span class="spinner-border spinner-border-sm" role="status"></span>';
     });
     console.log('[HistoLite] Caricamento overview da:', BASE_PATH + '/api/overview');
-    const data = await apiGet('/api/overview');
+    const data = await apiGet('/api/overview', { timeout: 120000 });
     console.log('[HistoLite] Risposta overview:', data);
     if (data.error) { showToast(data.error, 'danger'); return; }
 
@@ -239,6 +242,11 @@ async function loadDashboard() {
         document.getElementById('cache-badge').style.display = 'none';
       }
     }
+
+    // Badge "in calcolo" se il background sta ancora girando
+    const computingBadge = document.getElementById('computing-badge');
+    if (computingBadge) computingBadge.style.display = data.computing ? 'inline' : 'none';
+
     document.getElementById('refresh-btn').disabled = false;
 
   } catch(e) {
@@ -404,6 +412,13 @@ async function refreshOverview() {
   showGlobalLoading('Aggiornamento statistiche in corso…');
   try {
     const data = await apiPost('/api/overview/refresh', {});
+    if (data.computing) {
+      showToast('Calcolo già in corso, riprova tra qualche secondo.', 'warning');
+      if (data.total_states != null) {
+        renderTop10Table(data.top_sensors || []);
+      }
+      return;
+    }
     if (data.error) {
       showToast(`Errore: ${data.error}`, 'danger');
       return;

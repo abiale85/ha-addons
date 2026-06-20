@@ -7,6 +7,7 @@ import os
 import gc
 import logging
 import time
+import threading
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
@@ -51,6 +52,42 @@ config_manager = ConfigManager(DATA_PATH)
 cache = CacheManager(DATA_PATH)
 
 logger.info(f"HistoLite avviato - DB: {DB_PATH} - Port: {PORT} - Ingress: {INGRESS_PATH or '(nessuno)'}")
+
+# ---------------------------------------------------------------------------
+# Background overview scheduler
+# ---------------------------------------------------------------------------
+
+# Lock che garantisce una sola esecuzione di get_db_overview() alla volta,
+# indipendentemente da quanti client/pagine fanno richieste simultanee.
+_overview_lock = threading.Lock()
+
+def _run_overview_bg():
+    """Ricalcola l'overview in background. Un solo calcolo alla volta."""
+    if not _overview_lock.acquire(blocking=False):
+        logger.info("Overview gi\u00e0 in calcolo, skip duplicato")
+        return
+    try:
+        logger.info("Background: avvio calcolo overview...")
+        data = get_db_overview(db)
+        if "error" not in data:
+            cache.set("overview", data, ttl_seconds=300)
+            logger.info("Background: overview aggiornato in cache")
+        else:
+            logger.warning(f"Background overview errore: {data['error']}")
+    except Exception as e:
+        logger.error(f"Background overview eccezione: {e}")
+    finally:
+        _overview_lock.release()
+
+def _overview_scheduler():
+    """Thread daemon: ricalcola overview ogni 5 minuti."""
+    while True:
+        time.sleep(300)
+        _run_overview_bg()
+
+# Calcolo iniziale al boot + scheduler periodico
+threading.Thread(target=_run_overview_bg, name="overview-boot", daemon=True).start()
+threading.Thread(target=_overview_scheduler, name="overview-scheduler", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -143,28 +180,33 @@ def jobs_page():
 
 @app.route("/api/overview")
 def api_overview():
-    """Ritorna panoramica DB con cache (TTL 5min) e timestamp aggiornamento."""
+    """Ritorna panoramica DB con cache. Il calcolo avviene in background, mai in parallelo."""
     try:
-        # Controlla cache
         cached = cache.get_with_metadata("overview")
         if cached:
-            data = cached["value"]
+            data = dict(cached["value"])
             data["cached"] = True
             data["updated_timestamp"] = int(cached["timestamp_updated"])
             data["age_seconds"] = int(cached["age_seconds"])
-            logger.info(f"Ritornando overview da cache (eta {cached['age_seconds']:.0f}s)")
+            data["computing"] = _overview_lock.locked()
+            logger.info(f"Overview da cache (eta {cached['age_seconds']:.0f}s, computing={data['computing']})")
             return jsonify(data)
 
-        # Cache scaduto o assente -> ricalcola
-        logger.info("Cache overview scaduto, ricalcolando...")
-        data = get_db_overview(db)
-        if "error" not in data:
-            # TTL 5 minuti (300 secondi)
-            cache.set("overview", data, ttl_seconds=300)
+        # Nessuna cache: avvia compute se non gi\u00e0 in corso, poi aspetta
+        if not _overview_lock.locked():
+            threading.Thread(target=_run_overview_bg, name="overview-on-demand", daemon=True).start()
+        # Aspetta al massimo 90s che il lock si liberi (il calcolo finisca)
+        if _overview_lock.acquire(timeout=90):
+            _overview_lock.release()
+        cached = cache.get_with_metadata("overview")
+        if cached:
+            data = dict(cached["value"])
             data["cached"] = False
-            data["updated_timestamp"] = int(time.time())
+            data["updated_timestamp"] = int(cached["timestamp_updated"])
             data["age_seconds"] = 0
-        return jsonify(data)
+            data["computing"] = False
+            return jsonify(data)
+        return jsonify({"error": "Calcolo overview non completato, riprovare"}), 503
     except Exception as e:
         logger.error(f"Errore api/overview: {e}")
         return jsonify({"error": str(e)}), 500
@@ -172,17 +214,34 @@ def api_overview():
 
 @app.route("/api/overview/refresh", methods=["POST"])
 def api_overview_refresh():
-    """Forza il ricalcolo dell'overview, invalidando la cache."""
+    """Forza ricalcolo overview. Se gi\u00e0 in corso restituisce la cache attuale con computing=True."""
     try:
+        if _overview_lock.locked():
+            logger.info("Refresh richiesto ma overview gi\u00e0 in calcolo")
+            cached = cache.get_with_metadata("overview")
+            if cached:
+                data = dict(cached["value"])
+                data["cached"] = True
+                data["updated_timestamp"] = int(cached["timestamp_updated"])
+                data["age_seconds"] = int(cached["age_seconds"])
+                data["computing"] = True
+                return jsonify(data)
+            return jsonify({"error": "Calcolo gi\u00e0 in corso", "computing": True}), 202
+
         cache.invalidate("overview")
-        logger.info("Cache overview invalidato, ricalcolando...")
-        data = get_db_overview(db)
-        if "error" not in data:
-            cache.set("overview", data, ttl_seconds=300)
+        threading.Thread(target=_run_overview_bg, name="overview-refresh", daemon=True).start()
+        # Aspetta al massimo 120s
+        if _overview_lock.acquire(timeout=120):
+            _overview_lock.release()
+        cached = cache.get_with_metadata("overview")
+        if cached:
+            data = dict(cached["value"])
             data["cached"] = False
-            data["updated_timestamp"] = int(time.time())
+            data["updated_timestamp"] = int(cached["timestamp_updated"])
             data["age_seconds"] = 0
-        return jsonify(data)
+            data["computing"] = False
+            return jsonify(data)
+        return jsonify({"error": "Timeout calcolo overview"}), 504
     except Exception as e:
         logger.error(f"Errore refresh overview: {e}")
         return jsonify({"error": str(e)}), 500
