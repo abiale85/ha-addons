@@ -7,33 +7,13 @@ import os
 import logging
 import time
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect
 from flask_cors import CORS
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 from database import HaDatabase
 from analyzer import get_db_overview, analyze_sensor
 from strategies import execute_strategy, STRATEGY_LIST
 from config_manager import ConfigManager
-
-
-# ---------------------------------------------------------------------------
-# Middleware per supportare Ingress path prefix
-# ---------------------------------------------------------------------------
-
-class IngressPathMiddleware:
-    """Middleware che configura SCRIPT_NAME per Ingress reverse proxy."""
-    def __init__(self, app, ingress_path):
-        self.app = app
-        self.ingress_path = ingress_path
-    
-    def __call__(self, environ, start_response):
-        # Ingress è un reverse proxy che non include il prefisso in PATH_INFO
-        # Impostiamo SCRIPT_NAME per url_for()
-        if self.ingress_path:
-            environ['SCRIPT_NAME'] = self.ingress_path
-            logger.debug(f"Ingress middleware: SCRIPT_NAME={self.ingress_path}, PATH_INFO={environ['PATH_INFO']}")
-        return self.app(environ, start_response)
 
 # ---------------------------------------------------------------------------
 # Configurazione
@@ -50,7 +30,11 @@ DATA_PATH = os.environ.get("DATA_PATH", "/data")
 BACKUP_PATH = os.environ.get("BACKUP_PATH", "/backup")
 BACKUP_BEFORE_PURGE = os.environ.get("BACKUP_BEFORE_PURGE", "true").lower() == "true"
 MAX_ROWS_PER_BATCH = int(os.environ.get("MAX_ROWS_PER_BATCH", "5000"))
-INGRESS_PATH = os.environ.get("INGRESS_PATH", "")
+# INGRESS_PATH: HA Supervisor passa il prefisso come env var.
+# Ingress fa da reverse proxy e STRIPPA il prefisso prima di inviare la
+# richiesta al container → Flask riceve sempre path senza prefisso (es. GET /).
+# I template usano {{ base_path }}/route per generare URL completi verso Ingress.
+INGRESS_PATH = os.environ.get("INGRESS_PATH", "").rstrip("/")
 PORT = int(os.environ.get("PORT", "8099"))
 
 # ---------------------------------------------------------------------------
@@ -58,13 +42,12 @@ PORT = int(os.environ.get("PORT", "8099"))
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-if INGRESS_PATH:
-    app.wsgi_app = IngressPathMiddleware(app.wsgi_app, INGRESS_PATH)
 CORS(app)
 
 db = HaDatabase(DB_PATH)
 config_manager = ConfigManager(DATA_PATH)
+
+logger.info(f"HistoLite avviato - DB: {DB_PATH} - Port: {PORT} - Ingress: {INGRESS_PATH or '(nessuno)'}")
 
 
 @app.context_processor
@@ -76,37 +59,18 @@ def inject_globals():
     }
 
 
-# Logging all'avvio
-logger.info(f"HistoLite avviato - DB: {DB_PATH} - Port: {PORT}")
-logger.info(f"INGRESS_PATH={INGRESS_PATH}")
-
-
-# ---------------------------------------------------------------------------
-# Endpoint di debug (solo con log level debug)
-# ---------------------------------------------------------------------------
-
-@app.route("/_debug")
-def debug_info():
-    """Endpoint per debuggare la configurazione Ingress."""
-    return jsonify({
-        "INGRESS_PATH": INGRESS_PATH,
-        "SCRIPT_NAME": request.environ.get("SCRIPT_NAME", ""),
-        "PATH_INFO": request.environ.get("PATH_INFO", ""),
-        "REQUEST_URL": request.url,
-        "REQUEST_BASE_URL": request.base_url,
-        "REQUEST_HOST": request.host,
-        "url_for_dashboard": url_for("dashboard"),
-    })
-
-
 # ---------------------------------------------------------------------------
 # Pagine HTML
 # ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
-    # url_for() con SCRIPT_NAME impostato genera automaticamente l'URL corretto
-    return redirect(url_for("dashboard"))
+    # Ingress ha già strippato il prefisso → Flask riceve GET /.
+    # Redirect esplicito con INGRESS_PATH così il browser segue il percorso
+    # corretto attraverso Ingress verso /dashboard.
+    # (Come fa sqlite-web con --url-prefix)
+    target = (INGRESS_PATH + "/dashboard") if INGRESS_PATH else "/dashboard"
+    return redirect(target)
 
 
 @app.route("/dashboard")
