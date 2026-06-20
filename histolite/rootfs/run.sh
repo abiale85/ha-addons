@@ -6,7 +6,7 @@
 bashio::log.info "Avvio HistoLite..."
 
 # Leggi opzioni dalla configurazione HA
-export DB_PATH=$(bashio::config 'db_path')
+export DB_PATH=$(bashio::config 'db_path' '/config/home-assistant_v2.db')
 export BACKUP_BEFORE_PURGE=$(bashio::config 'backup_before_purge')
 export BACKUP_PATH=$(bashio::config 'backup_path')
 export LOG_LEVEL=$(bashio::config 'log_level')

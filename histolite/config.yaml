@@ -16,12 +16,9 @@ panel_title: "HistoLite"
 arch:
   - aarch64
   - amd64
-  - armhf
-  - armv7
-  - i386
 
 options:
-  db_path: "/homeassistant/home-assistant_v2.db"
+  db_path: "/config/home-assistant_v2.db"
   backup_before_purge: true
   backup_path: "/backup"
   log_level: "info"
@@ -35,9 +32,8 @@ schema:
   max_rows_per_batch: int
 
 map:
-  - homeassistant:rw
+  - config:rw
   - backup:rw
-  - data:rw
   - ssl:ro
 
 ports:

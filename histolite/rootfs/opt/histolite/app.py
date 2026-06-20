@@ -26,7 +26,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("histolite")
 
-DB_PATH = os.environ.get("DB_PATH", "/homeassistant/home-assistant_v2.db")
+DB_PATH = os.environ.get("DB_PATH", "/config/home-assistant_v2.db")
 DATA_PATH = os.environ.get("DATA_PATH", "/data")
 BACKUP_PATH = os.environ.get("BACKUP_PATH", "/backup")
 BACKUP_BEFORE_PURGE = os.environ.get("BACKUP_BEFORE_PURGE", "true").lower() == "true"

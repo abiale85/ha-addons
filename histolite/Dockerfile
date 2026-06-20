@@ -1,5 +1,4 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM python:3.12-alpine
 
 # Installa dipendenze di sistema
 RUN apk add --no-cache \
