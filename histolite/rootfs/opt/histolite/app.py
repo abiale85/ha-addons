@@ -4,6 +4,7 @@ Add-on Home Assistant per gestione intelligente della history dei sensori
 """
 
 import os
+import gc
 import logging
 import time
 from datetime import datetime
@@ -482,5 +483,43 @@ def api_jobs_clear():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import multiprocessing
     logger.info(f"HistoLite avviato - DB: {DB_PATH} - Port: {PORT}")
-    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
+    # Usa Gunicorn in produzione per gestire memoria in modo controllato.
+    # 1 worker + 4 thread: bassa RAM, concorrenza sufficiente per add-on locale.
+    try:
+        from gunicorn.app.base import BaseApplication
+
+        class StandaloneApp(BaseApplication):
+            def __init__(self, application, options=None):
+                self.options = options or {}
+                self.application = application
+                super().__init__()
+
+            def load_config(self):
+                for key, value in self.options.items():
+                    if key in self.cfg.settings and value is not None:
+                        self.cfg.set(key.lower(), value)
+
+            def load(self):
+                return self.application
+
+        options = {
+            "bind": f"0.0.0.0:{PORT}",
+            "workers": 1,
+            "threads": 4,
+            "worker_class": "gthread",
+            # Riavvia worker dopo N richieste per liberare memoria (Python non restituisce RAM all'OS)
+            "max_requests": 200,
+            "max_requests_jitter": 30,
+            "timeout": 120,
+            "keepalive": 2,
+            "accesslog": "-",
+            "errorlog": "-",
+            "loglevel": os.environ.get("LOG_LEVEL", "info").lower(),
+        }
+        logger.info("Avvio con Gunicorn (1 worker, 4 thread)")
+        StandaloneApp(app, options).run()
+    except ImportError:
+        logger.warning("Gunicorn non disponibile, fallback su Flask dev server")
+        app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)

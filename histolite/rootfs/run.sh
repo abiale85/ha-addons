@@ -43,6 +43,21 @@ export DATA_PATH
 export INGRESS_PATH
 export PORT=8099
 
-# Avvia l'applicazione Flask
+# Avvia l'applicazione con Gunicorn
+# - 1 worker gthread + 4 thread: ottimale per add-on locale (bassa RAM, concorrenza sufficiente)
+# - max_requests: riavvia il worker ogni 200 richieste per liberare memoria frammentata
+# - timeout 120s: sufficiente per query SQLite pesanti
 cd /opt/histolite
-exec python3 app.py
+exec gunicorn \
+  --bind "0.0.0.0:${PORT}" \
+  --workers 1 \
+  --threads 4 \
+  --worker-class gthread \
+  --max-requests 200 \
+  --max-requests-jitter 30 \
+  --timeout 120 \
+  --keepalive 2 \
+  --log-level "${LOG_LEVEL:-info}" \
+  --access-logfile - \
+  --error-logfile - \
+  "app:app"

@@ -33,10 +33,17 @@ class HaDatabase:
             uri = f"file:{self.db_path}"
         conn = sqlite3.connect(uri, uri=True, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        # Crea indici per performance (se non esistono)
+        # Limita cache SQLite: 512 pagine × 4KB = 2MB massimo per connessione
+        conn.execute("PRAGMA cache_size = -512")
+        # Nessuna memory-mapped I/O (riduce RSS in modo significativo)
+        conn.execute("PRAGMA mmap_size = 0")
+        # Temp store su file invece che in RAM
+        conn.execute("PRAGMA temp_store = FILE")
         if not read_only:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            # WAL checkpoint automatico ogni 500 pagine (evita crescita illimitata)
+            conn.execute("PRAGMA wal_autocheckpoint = 500")
             try:
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_id ON states(entity_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_last_updated_ts ON states(last_updated_ts) WHERE last_updated_ts IS NOT NULL")
