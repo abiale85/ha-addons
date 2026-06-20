@@ -50,10 +50,17 @@ config_manager = ConfigManager(DATA_PATH)
 logger.info(f"HistoLite avviato - DB: {DB_PATH} - Port: {PORT} - Ingress: {INGRESS_PATH or '(nessuno)'}")
 
 
+def _get_ingress_path():
+    """Restituisce il path Ingress reale leggendo l'header X-Ingress-Path.
+    HA Ingress invia questo header con il path token-based corretto
+    (es. /api/hassio_ingress/TOKEN). Fallback sull'env var INGRESS_PATH."""
+    return request.headers.get('X-Ingress-Path', INGRESS_PATH).rstrip('/')
+
+
 @app.context_processor
 def inject_globals():
     return {
-        "base_path": INGRESS_PATH,
+        "base_path": _get_ingress_path(),
         "db_path": DB_PATH,
         "now": datetime.now().strftime("%d/%m/%Y %H:%M"),
     }
@@ -65,11 +72,11 @@ def inject_globals():
 
 @app.route("/")
 def index():
-    # Ingress ha già strippato il prefisso → Flask riceve GET /.
-    # Redirect esplicito con INGRESS_PATH così il browser segue il percorso
-    # corretto attraverso Ingress verso /dashboard.
-    # (Come fa sqlite-web con --url-prefix)
-    target = (INGRESS_PATH + "/dashboard") if INGRESS_PATH else "/dashboard"
+    # Leggi il path Ingress reale dall'header (token-based, es. /api/hassio_ingress/TOKEN)
+    # che HA Ingress invia con ogni richiesta. Il browser segue il redirect
+    # verso quel path e Ingress lo instradata correttamente al container.
+    ingress = _get_ingress_path()
+    target = (ingress + "/dashboard") if ingress else "/dashboard"
     return redirect(target)
 
 

@@ -20,8 +20,10 @@ LOG_LEVEL="${LOG_LEVEL:-info}"
 MAX_ROWS_PER_BATCH="${MAX_ROWS_PER_BATCH:-5000}"
 DATA_PATH="/data"
 
-# Leggi INGRESS_PATH dalla variabile d'ambiente (impostata da HA)
-INGRESS_PATH="${INGRESS_PATH:-/api/addons/70b55b62_histolite}"
+# INGRESS_PATH: HA Supervisor imposta questa variabile con il path reale
+# (es. /api/hassio_ingress/TOKEN). Se non e' presente la lasciamo vuota;
+# app.py legge l'header X-Ingress-Path su ogni richiesta (piu' affidabile).
+INGRESS_PATH="${INGRESS_PATH:-}"
 
 echo "HistoLite: Avvio..."
 echo "Database: $DB_PATH"
