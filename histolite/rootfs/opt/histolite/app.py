@@ -266,7 +266,7 @@ def jobs_page():
 
 @app.route("/api/overview")
 def api_overview():
-    """Ritorna panoramica DB con cache. Il calcolo avviene in background, mai in parallelo."""
+    """Ritorna panoramica DB con cache. Il calcolo avviene inline (lock previene parallelismo)."""
     try:
         cached = cache.get_with_metadata("overview")
         if cached:
@@ -278,21 +278,33 @@ def api_overview():
             logger.info(f"Overview da cache (eta {cached['age_seconds']:.0f}s, computing={data['computing']})")
             return jsonify(data)
 
-        # Nessuna cache: avvia compute se non gi\u00e0 in corso, poi aspetta
-        if not _overview_lock.locked():
-            threading.Thread(target=_run_overview_bg, name="overview-on-demand", daemon=True).start()
-        # Aspetta al massimo 90s che il lock si liberi (il calcolo finisca)
-        if _overview_lock.acquire(timeout=90):
+        # Nessuna cache: acquisisce il lock e calcola direttamente in questo thread.
+        # Se un altro thread sta gia calcolando, aspetta che finisca (double-check cache dopo).
+        logger.info("Overview: nessuna cache, avvio calcolo on-demand...")
+        if not _overview_lock.acquire(timeout=120):
+            return jsonify({"error": "Timeout attesa calcolo overview, riprovare"}), 503
+        try:
+            # Double-check: un altro thread potrebbe aver completato mentre aspettavamo
+            cached = cache.get_with_metadata("overview")
+            if cached:
+                data = dict(cached["value"])
+                data["cached"] = True
+                data["updated_timestamp"] = int(cached["timestamp_updated"])
+                data["age_seconds"] = int(cached["age_seconds"])
+                data["computing"] = False
+                return jsonify(data)
+            # Calcola direttamente (nessun thread background)
+            result = get_db_overview(db)
+            if "error" not in result:
+                cache.set("overview", result, ttl_seconds=300)
+                logger.info("Overview calcolato e salvato in cache")
+                resp = dict(result)
+                resp["cached"] = False
+                resp["computing"] = False
+                return jsonify(resp)
+            return jsonify({"error": result["error"]}), 500
+        finally:
             _overview_lock.release()
-        cached = cache.get_with_metadata("overview")
-        if cached:
-            data = dict(cached["value"])
-            data["cached"] = False
-            data["updated_timestamp"] = int(cached["timestamp_updated"])
-            data["age_seconds"] = 0
-            data["computing"] = False
-            return jsonify(data)
-        return jsonify({"error": "Calcolo overview non completato, riprovare"}), 503
     except Exception as e:
         logger.error(f"Errore api/overview: {e}")
         return jsonify({"error": str(e)}), 500

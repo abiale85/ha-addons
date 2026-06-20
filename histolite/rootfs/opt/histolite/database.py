@@ -149,13 +149,29 @@ class HaDatabase:
         """True se il DB usa il nuovo schema con states_meta (entity_id separato).
         
         Solo per 'modern': in HA recorder v23+ con migrazione completata.
-        'transitional' viene trattato come legacy perché i dati storici hanno
-        entity_id impostato mentre states_meta potrebbe avere solo le entità
-        registrate dopo la migrazione (poche). Usare states_meta causerebbe
-        sensori vuoti e query incomplete sui dati storici.
+        'transitional' viene trattato come legacy SE ha dati reali in entity_id;
+        altrimenti (migrazione completata, entity_id tutto NULL) → usa meta schema.
         """
         schema = self.get_schema_info()
-        return schema.get("schema_type") == "modern"
+        st = schema.get("schema_type")
+        if st == "modern":
+            return True
+        if st == "transitional":
+            # Controlla se esistono record con entity_id valido (rilevazione una-tantum, cachata)
+            if "_has_legacy_data" not in schema:
+                try:
+                    with self._connect(read_only=True) as conn:
+                        conn.execute("PRAGMA busy_timeout=2000")
+                        row = conn.execute(
+                            "SELECT 1 FROM states WHERE entity_id IS NOT NULL AND entity_id != '' LIMIT 1"
+                        ).fetchone()
+                        schema["_has_legacy_data"] = row is not None
+                        logger.info(f"Schema transitional: has_legacy_data={schema['_has_legacy_data']}")
+                except Exception as e:
+                    logger.warning(f"_use_meta_schema transitional check: {e}")
+                    schema["_has_legacy_data"] = True  # fallback conservativo
+            return not schema["_has_legacy_data"]
+        return False
 
     def _validate_schema_for_write(self) -> None:
         """Verifica che lo schema sia riconosciuto prima di qualsiasi scrittura.

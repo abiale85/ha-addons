@@ -283,12 +283,12 @@
 {% endblock %}
 
 {% block scripts %}
+<script type="application/json" id="strategies-data">{{ saved_strategies | tojson }}</script>
 <script>
-// Mappa ID -> oggetto strategia (evita JSON inline negli onclick)
-const STRATEGIES_MAP = {
-  {% for s in saved_strategies %}"{{ s.id }}": {{ s|tojson }}{% if not loop.last %},{% endif %}
-  {% endfor %}
-};
+// Mappa ID -> oggetto strategia (caricata da JSON tag sicuro per evitare </script> injection)
+const _strategiesArr = JSON.parse(document.getElementById('strategies-data').textContent);
+const STRATEGIES_MAP = {};
+_strategiesArr.forEach(s => { STRATEGIES_MAP[String(s.id)] = s; });
 
 let selectedEntities = [];
 let allSensorsList = [];
