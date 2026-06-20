@@ -181,6 +181,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function loadDashboard() {
+  showGlobalLoading('Calcolo statistiche database in corso…');
   try {
     // Mostra spinner durante il caricamento (query puo' essere lenta su DB grande)
     ['kpi-states','kpi-size','kpi-sensors','kpi-top10'].forEach(id => {
@@ -249,6 +250,8 @@ async function loadDashboard() {
     document.getElementById('top10-body').innerHTML =
       `<tr><td colspan="6" class="text-center text-danger py-3">Errore: ${e.message}</td></tr>`;
     showToast('Errore caricamento dashboard: ' + e.message, 'danger');
+  } finally {
+    hideGlobalLoading();
   }
 }
 
@@ -398,8 +401,8 @@ async function purgeStatistics() {
 
 async function refreshOverview() {
   document.getElementById('refresh-btn').disabled = true;
+  showGlobalLoading('Aggiornamento statistiche in corso…');
   try {
-    showToast('Aggiornamento dati in corso...', 'info');
     const data = await apiPost('/api/overview/refresh', {});
     if (data.error) {
       showToast(`Errore: ${data.error}`, 'danger');
@@ -427,6 +430,7 @@ async function refreshOverview() {
   } catch(e) {
     showToast(`Errore refresh: ${e.message}`, 'danger');
   } finally {
+    hideGlobalLoading();
     document.getElementById('refresh-btn').disabled = false;
   }
 }

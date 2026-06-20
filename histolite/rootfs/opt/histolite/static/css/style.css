@@ -12,6 +12,30 @@
   --hl-accent: #0dcaf0;
 }
 
+/* ---- Global loading overlay ---- */
+.hl-global-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(15, 17, 23, 0.88);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: all;
+}
+.hl-global-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 2.5rem 3rem;
+  background: var(--hl-surface);
+  border: 1px solid var(--hl-border);
+  border-radius: 1rem;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+}
+
 /* ---- Layout ---- */
 body {
   background: var(--hl-bg);

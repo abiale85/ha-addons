@@ -53,6 +53,26 @@ async function apiPost(path, body) {
 }
 
 // ---------------------------------------------------------------------------
+// Global loading overlay
+// ---------------------------------------------------------------------------
+
+/**
+ * Mostra un overlay full-screen bloccante durante operazioni pesanti sul DB.
+ */
+function showGlobalLoading(msg) {
+  const overlay = document.getElementById('global-loading-overlay');
+  if (!overlay) return;
+  const msgEl = document.getElementById('global-loading-msg');
+  if (msgEl && msg) msgEl.textContent = msg;
+  overlay.classList.remove('d-none');
+}
+
+function hideGlobalLoading() {
+  const overlay = document.getElementById('global-loading-overlay');
+  if (overlay) overlay.classList.add('d-none');
+}
+
+// ---------------------------------------------------------------------------
 // Formatters
 // ---------------------------------------------------------------------------
 
