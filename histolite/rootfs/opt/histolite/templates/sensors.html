@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% block title %}- Sensori{% endblock %}
 {% block page_title %}<i class="bi bi-reception-4 me-2"></i>Sensori{% endblock %}
 
@@ -281,36 +281,37 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// â”€â”€ Carica top sensori dalla cache overview (velocissimo) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --
 async function loadFromOverviewCache() {
   const tbody = document.getElementById('sensors-body');
-  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento…</td></tr>';
-  document.getElementById('source-badge').textContent = 'cache';
-  document.getElementById('source-badge').className = 'badge bg-info';
+  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento...</td></tr>';
+  document.getElementById('source-badge').textContent = 'lista';
+  document.getElementById('source-badge').className = 'badge bg-secondary';
+
+  if (sensorLoadController) sensorLoadController.abort();
+  sensorLoadController = new AbortController();
+
   try {
-    const data = await apiGet('/api/overview');
-    allSensors = (data.top_sensors || []).map(s => ({
-      entity_id: s.entity_id,
-      record_count: s.record_count,
-      first_seen: s.first_seen,
-      last_seen: s.last_seen,
-    }));
+    const entities = await apiFetch('/api/sensors/list', { signal: sensorLoadController.signal });
+    allSensors = (entities || []).map(e => ({ entity_id: e.entity_id, record_count: 0 }));
     if (allSensors.length === 0) {
-      // Overview vuota â†’ carica lista completa
-      document.getElementById('load-more-row').classList.remove('d-none');
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">Nessun dato in cache. Clicca "Carica lista completa" qui sotto.</td></tr>';
-      document.getElementById('sensors-count').textContent = '0 entità';
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">Nessuna entita trovata nel database.</td></tr>';
+      document.getElementById('sensors-count').textContent = '0 entita';
       return;
     }
     sortAndRender();
-    document.getElementById('sensors-count').textContent = allSensors.length + ' top entità';
+    document.getElementById('sensors-count').textContent = allSensors.length + ' entita';
     document.getElementById('load-more-row').classList.remove('d-none');
   } catch(e) {
-    tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger">${e.message}</td></tr>`;
+    if (e.name !== 'AbortError') {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger">${e.message}</td></tr>`;
+    }
+  } finally {
+    sensorLoadController = null;
   }
 }
 
-// â”€â”€ Carica lista completa con conteggi (GROUP BY, potenzialmente lento) â”€â”€â”€â”€â”€
+// -- Carica lista completa con conteggi (GROUP BY, lento) --
 async function loadFullList() {
   const search = document.getElementById('search-input').value;
   const limit = document.getElementById('limit-select').value;
@@ -348,7 +349,7 @@ async function loadFullList() {
   }
 }
 
-// â”€â”€ loadSensors: per ricerca testuale (usa /api/sensors/list veloce) â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --
 async function loadSensors() {
   const search = document.getElementById('search-input').value;
   const tbody = document.getElementById('sensors-body');
@@ -391,7 +392,7 @@ function cancelLoadSensors() {
   if (sensorLoadController) sensorLoadController.abort();
 }
 
-// â”€â”€ Ordina e renderizza â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --
 function sortAndRender() {
   const sort = document.getElementById('sort-select').value;
   const limit = parseInt(document.getElementById('limit-select').value);
@@ -449,7 +450,7 @@ function renderSensorsTable(sensors) {
   }).join('');
 }
 
-// â”€â”€ Dettaglio on-demand al click sulla riga â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --
 let detailController = null;
 
 async function selectDetailRow(row, eid) {
@@ -521,7 +522,7 @@ async function selectDetailRow(row, eid) {
   }
 }
 
-// â”€â”€ Selezione multipla â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --
 function toggleRow(cb, eid) {
   if (cb.checked) selectedIds.add(eid);
   else selectedIds.delete(eid);
@@ -553,7 +554,7 @@ function updateSelectionToolbar() {
   document.getElementById('sel-count').textContent = selectedIds.size;
 }
 
-// â”€â”€ Strategia rapida (modal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --
 function updateQuickParams() {
   const val = document.getElementById('quick-strategy').value;
   document.querySelectorAll('.strategy-params').forEach(el => el.classList.add('d-none'));
