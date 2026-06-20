@@ -550,11 +550,11 @@ class HaDatabase:
                     meta_id = self._get_metadata_id(conn, entity_id)
                     if meta_id is None:
                         return result
-                    where_clause = "WHERE s.metadata_id = ?"
-                    where_param = meta_id
+                    id_filter = "s.metadata_id = ?"
+                    id_param = meta_id
                 else:
-                    where_clause = "WHERE s.entity_id = ?"
-                    where_param = entity_id
+                    id_filter = "s.entity_id = ?"
+                    id_param = entity_id
                 
                 # Estrai attributi dal primo record (contengono le configurazioni)
                 if use_meta:
@@ -562,16 +562,16 @@ class HaDatabase:
                         SELECT sa.attributes FROM state_attributes sa
                         WHERE sa.attributes_id IN (
                             SELECT DISTINCT s.attributes_id FROM states s
-                            {where_clause} LIMIT 1
+                            WHERE {id_filter} LIMIT 1
                         )
                     """
-                    attr_row = conn.execute(attr_query, (where_param,)).fetchone()
                 else:
                     attr_query = f"""
                         SELECT attributes FROM states
-                        {where_clause} LIMIT 1
+                        WHERE {id_filter} LIMIT 1
                     """
-                    attr_row = conn.execute(attr_query, (where_param,)).fetchone()
+                
+                attr_row = conn.execute(attr_query, (id_param,)).fetchone()
                 
                 if attr_row and attr_row[0]:
                     try:
@@ -583,36 +583,47 @@ class HaDatabase:
                     except (json.JSONDecodeError, TypeError):
                         pass
                 
-                # Calcola min/max osservati sui valori numerici
+                # Calcola min/max osservati sui valori numerici (CAST fa filtro automatico)
+                # Usa TRY() per gestire i valori non-numerici
                 stats_query = f"""
                     SELECT
                         MIN(CAST(s.state AS REAL)) AS obs_min,
                         MAX(CAST(s.state AS REAL)) AS obs_max,
-                        AVG(CAST(s.state AS REAL)) AS avg_val,
-                        SQRT(
-                            SUM((CAST(s.state AS REAL) - (SELECT AVG(CAST(s2.state AS REAL)) FROM states s2 {where_clause})) * 
-                                (CAST(s.state AS REAL) - (SELECT AVG(CAST(s2.state AS REAL)) FROM states s2 {where_clause})))
-                            / COUNT(*)
-                        ) AS stddev_val
+                        AVG(CAST(s.state AS REAL)) AS avg_val
                     FROM states s
-                    {where_clause}
+                    WHERE {id_filter}
                     AND s.state NOT IN ('unknown','unavailable','')
-                    AND s.state GLOB '[+-]?[0-9]*[.]?[0-9]+'
+                    AND typeof(CAST(s.state AS REAL)) = 'real'
                 """
                 
-                stats_row = conn.execute(stats_query, (where_param, where_param, where_param)).fetchone()
+                stats_row = conn.execute(stats_query, (id_param,)).fetchone()
                 if stats_row:
                     result["observed_min"] = stats_row["obs_min"]
                     result["observed_max"] = stats_row["obs_max"]
                     result["recent_avg"] = stats_row["avg_val"]
-                    result["recent_stddev"] = stats_row["stddev_val"]
+                    
+                    # Calcola stddev separatamente per evitare errori
+                    if stats_row["avg_val"] is not None:
+                        stddev_query = f"""
+                            SELECT SQRT(
+                                SUM((CAST(s.state AS REAL) - ?) * (CAST(s.state AS REAL) - ?))
+                                / COUNT(*)
+                            ) AS stddev_val
+                            FROM states s
+                            WHERE {id_filter}
+                            AND s.state NOT IN ('unknown','unavailable','')
+                            AND typeof(CAST(s.state AS REAL)) = 'real'
+                        """
+                        stddev_row = conn.execute(stddev_query, 
+                            (id_param, stats_row["avg_val"], stats_row["avg_val"])).fetchone()
+                        if stddev_row:
+                            result["recent_stddev"] = stddev_row["stddev_val"]
                 
             except sqlite3.OperationalError as e:
-                if "timeout" in str(e).lower():
-                    logger.warning(f"get_sensor_value_range {entity_id}: timeout")
-                raise
+                logger.warning(f"get_sensor_value_range {entity_id}: {e}")
         
         return result
+
 
     # ------------------------------------------------------------------
     # Operazioni di purge
