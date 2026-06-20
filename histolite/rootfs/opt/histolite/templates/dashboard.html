@@ -246,8 +246,6 @@ function renderBarChart(id, sensors) {
   const labels = valid.map(s => s.entity_id.split('.').pop());
   const values = valid.map(s => s.record_count);
   const colors = values.map((v, i) => `hsl(${200 + i * 18}, 70%, 55%)`);
-
-  const colors = values.map((v, i) => `hsl(${200 + i * 18}, 70%, 55%)`);
   new Chart(canvas, {
     type: 'bar',
     data: {
@@ -289,11 +287,12 @@ function renderTableDist(id, counts) {
 
 function renderTop10Table(sensors) {
   const tbody = document.getElementById('top10-body');
-  if (!sensors.length) {
+  const valid = (sensors || []).filter(s => s && s.entity_id);
+  if (!valid.length) {
     tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">Nessun dato</td></tr>';
     return;
   }
-  tbody.innerHTML = sensors.map((s, i) => `
+  tbody.innerHTML = valid.map((s, i) => `
     <tr>
       <td><span class="badge bg-secondary">${i + 1}</span></td>
       <td><code class="entity-id">${s.entity_id}</code></td>
