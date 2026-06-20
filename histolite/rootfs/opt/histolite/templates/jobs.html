@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}- Cronologia{% endblock %}
+{% block page_title %}<i class="bi bi-clock-history me-2"></i>Cronologia operazioni{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <span class="text-muted small">Ultime {{ jobs|length }} operazioni eseguite</span>
+  <button class="btn btn-sm btn-outline-danger" onclick="clearJobs()">
+    <i class="bi bi-trash me-1"></i>Svuota cronologia
+  </button>
+</div>
+
+{% if not jobs %}
+<div class="card">
+  <div class="card-body text-center py-5 text-muted">
+    <i class="bi bi-inbox display-4 d-block mb-3"></i>
+    <p>Nessuna operazione eseguita finora.</p>
+    <a href="{{ base_path }}/sensors" class="btn btn-outline-primary">
+      Vai ai Sensori <i class="bi bi-arrow-right"></i>
+    </a>
+  </div>
+</div>
+{% else %}
+<div id="jobs-list">
+  {% for job in jobs %}
+  <div class="card mb-2 job-card {% if job.result.error %}border-danger{% elif job.dry_run %}border-secondary{% else %}border-success{% endif %}">
+    <div class="card-body py-2 px-3">
+      <div class="row align-items-center">
+        <div class="col-md-4">
+          <div class="d-flex align-items-center gap-2">
+            {% if job.result.error %}
+              <i class="bi bi-x-circle-fill text-danger fs-5"></i>
+            {% elif job.dry_run %}
+              <i class="bi bi-eye-fill text-secondary fs-5"></i>
+            {% else %}
+              <i class="bi bi-check-circle-fill text-success fs-5"></i>
+            {% endif %}
+            <div>
+              <div class="fw-semibold small">{{ job.strategy }}</div>
+              <div class="text-muted" style="font-size:0.75rem">{{ job.executed_at }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-3">
+          <span class="badge {% if job.dry_run %}bg-secondary{% else %}bg-primary{% endif %} me-1">
+            {{ 'Anteprima' if job.dry_run else 'Eseguita' }}
+          </span>
+          <span class="badge bg-dark border border-secondary">
+            {{ job.result.entity_count }} entità
+          </span>
+        </div>
+        <div class="col-md-3 text-center">
+          {% if job.result.error %}
+            <span class="text-danger small">{{ job.result.error|truncate(40) }}</span>
+          {% else %}
+            <span class="text-warning fw-bold">
+              <i class="bi bi-trash me-1"></i>{{ '{:,}'.format(job.result.total_deleted or 0) }} record
+            </span>
+          {% endif %}
+        </div>
+        <div class="col-md-2 text-end">
+          {% if job.result.backup %}
+          <span class="badge bg-info text-dark" title="{{ job.result.backup }}">
+            <i class="bi bi-shield-check me-1"></i>Backup
+          </span>
+          {% endif %}
+          <button class="btn btn-xs btn-outline-secondary ms-1"
+                  type="button" data-bs-toggle="collapse"
+                  data-bs-target="#job-detail-{{ loop.index }}">
+            <i class="bi bi-chevron-down"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Dettaglio espandibile -->
+      <div class="collapse mt-2" id="job-detail-{{ loop.index }}">
+        <div class="border-top border-secondary pt-2">
+          <div class="row g-2">
+            <div class="col-md-6">
+              <div class="text-muted small mb-1">Parametri</div>
+              <pre class="small text-info mb-0" style="white-space:pre-wrap">{{ job.params|tojson(indent=2) }}</pre>
+            </div>
+            <div class="col-md-6">
+              <div class="text-muted small mb-1">Entità ({{ job.entity_ids|length }})</div>
+              <div class="d-flex flex-wrap gap-1">
+                {% for eid in job.entity_ids[:20] %}
+                <code class="badge bg-dark text-white border border-secondary" style="font-size:0.7rem">{{ eid }}</code>
+                {% endfor %}
+                {% if job.entity_ids|length > 20 %}
+                <span class="text-muted small">+{{ job.entity_ids|length - 20 }} altri</span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function clearJobs() {
+  if (!confirm('Svuotare tutta la cronologia?')) return;
+  await apiPost('/api/jobs/clear', {});
+  showToast('Cronologia svuotata', 'success');
+  setTimeout(() => location.reload(), 600);
+}
+</script>
+{% endblock %}

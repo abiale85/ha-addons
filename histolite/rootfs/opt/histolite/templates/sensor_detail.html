@@ -1,0 +1,371 @@
+{% extends "base.html" %}
+{% block title %}- Dettaglio sensore{% endblock %}
+{% block page_title %}<i class="bi bi-zoom-in me-2"></i>Dettaglio sensore{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{{ base_path }}/sensors">Sensori</a></li>
+    <li class="breadcrumb-item active"><code>{{ entity_id }}</code></li>
+  </ol>
+</nav>
+
+<!-- Info card -->
+<div class="row g-3 mb-3" id="detail-kpi">
+  <div class="col-6 col-md-3">
+    <div class="card kpi-card">
+      <div class="card-body">
+        <div class="kpi-label">Record totali</div>
+        <div class="kpi-value text-info" id="d-total">…</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card kpi-card">
+      <div class="card-body">
+        <div class="kpi-label">Media / giorno</div>
+        <div class="kpi-value text-warning" id="d-avg">…</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card kpi-card">
+      <div class="card-body">
+        <div class="kpi-label">Tipo</div>
+        <div class="kpi-value text-success" id="d-type">…</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card kpi-card">
+      <div class="card-body">
+        <div class="kpi-label">Storia disponibile</div>
+        <div class="kpi-value text-primary" id="d-span">…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <!-- Grafico densità giornaliera -->
+  <div class="col-lg-8">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-graph-up me-2"></i>Record per giorno (ultimi 90 giorni)</span>
+        <select class="form-select form-select-sm w-auto" id="chart-days" onchange="reloadChart()">
+          <option value="30">30 giorni</option>
+          <option value="90" selected>90 giorni</option>
+          <option value="180">180 giorni</option>
+          <option value="365">1 anno</option>
+        </select>
+      </div>
+      <div class="card-body">
+        <canvas id="densityChart" height="180"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Risparmio stimato -->
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-calculator me-2"></i>Risparmio stimato
+      </div>
+      <div class="card-body" id="savings-body">
+        <p class="text-muted small">Caricamento…</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Ultimi valori -->
+<div class="row g-3 mb-3">
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-list-ul me-2"></i>Ultimi valori registrati</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0" id="recent-table">
+          <thead><tr><th>Valore</th><th>Timestamp</th></tr></thead>
+          <tbody id="recent-body">
+            <tr><td colspan="2" class="text-muted text-center py-2">Caricamento…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pannello azione -->
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-lightning me-2"></i>Applica strategia a questo sensore</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">Strategia</label>
+          <select class="form-select" id="detail-strategy" onchange="updateDetailParams()">
+            <option value="simple_purge">Purge Semplice</option>
+            <option value="temporal_decimation">Decimazione Temporale</option>
+            <option value="rolling_average">Media Mobile</option>
+            <option value="adaptive_purge">Purge Adattivo</option>
+          </select>
+          <div class="form-text" id="strategy-desc"></div>
+        </div>
+
+        <!-- Params simple -->
+        <div id="dp-simple" class="detail-params">
+          <label class="form-label">Elimina record più vecchi di</label>
+          <div class="input-group input-group-sm">
+            <input type="number" class="form-control" id="dp-simple-days" value="30" min="1">
+            <span class="input-group-text">giorni</span>
+          </div>
+        </div>
+        <!-- Params temporal -->
+        <div id="dp-temporal" class="detail-params d-none">
+          <label class="form-label">Soglia appiattimento orario</label>
+          <div class="input-group input-group-sm">
+            <input type="number" class="form-control" id="dp-temp-days" value="14" min="1">
+            <span class="input-group-text">giorni</span>
+          </div>
+        </div>
+        <!-- Params rolling -->
+        <div id="dp-rolling" class="detail-params d-none">
+          <label class="form-label">Applica media a dati più vecchi di</label>
+          <div class="input-group input-group-sm mb-2">
+            <input type="number" class="form-control" id="dp-roll-days" value="7" min="1">
+            <span class="input-group-text">giorni</span>
+          </div>
+          <select class="form-select form-select-sm" id="dp-roll-gran">
+            <option value="hour">Granularità oraria</option>
+            <option value="day">Granularità giornaliera</option>
+          </select>
+        </div>
+        <!-- Params adaptive -->
+        <div id="dp-adaptive" class="detail-params d-none">
+          <div class="row g-2">
+            <div class="col-4">
+              <label class="form-label small">Orario dopo</label>
+              <div class="input-group input-group-sm">
+                <input type="number" class="form-control" id="dp-adp-t1" value="7" min="1">
+                <span class="input-group-text">gg</span>
+              </div>
+            </div>
+            <div class="col-4">
+              <label class="form-label small">Giorn. dopo</label>
+              <div class="input-group input-group-sm">
+                <input type="number" class="form-control" id="dp-adp-t2" value="30" min="1">
+                <span class="input-group-text">gg</span>
+              </div>
+            </div>
+            <div class="col-4">
+              <label class="form-label small">Elimina dopo</label>
+              <div class="input-group input-group-sm">
+                <input type="number" class="form-control" id="dp-adp-t3" value="365" min="1">
+                <span class="input-group-text">gg</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <hr class="my-3">
+        <div id="dp-preview-result" class="small text-muted mb-3">
+          Usa "Anteprima" per stimare l'impatto prima di applicare.
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-secondary flex-grow-1" onclick="detailPreview()">
+            <i class="bi bi-eye me-1"></i>Anteprima
+          </button>
+          <button class="btn btn-sm btn-danger flex-grow-1" onclick="detailExecute()">
+            <i class="bi bi-play-fill me-1"></i>Esegui
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ENTITY_ID = "{{ entity_id }}";
+let densityChart = null;
+
+const STRATEGY_DESCS = {
+  simple_purge: 'Elimina tutti i record più vecchi del limite impostato.',
+  temporal_decimation: 'Mantieni 1 record/ora dopo N giorni, 1 record/giorno dopo 2N giorni.',
+  rolling_average: 'Sostituisce i record con la media del bucket (solo sensori numerici).',
+  adaptive_purge: 'Gestione multi-fascia: appiattimento progressivo poi eliminazione completa.',
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadDetail();
+  updateDetailParams();
+});
+
+async function loadDetail() {
+  try {
+    const data = await apiGet(`/api/sensors/${encodeURIComponent(ENTITY_ID)}`);
+    if (data.error) { showToast(data.error, 'danger'); return; }
+
+    const s = data.stats;
+    document.getElementById('d-total').textContent = fmt(s.record_count);
+    document.getElementById('d-avg').textContent = data.avg_per_day + '/gg';
+    document.getElementById('d-type').textContent = data.is_numeric ? 'Numerico' : 'Testuale';
+
+    // Span storia
+    if (s.first_ts && s.last_ts) {
+      const first = fmtTs(s.first_ts);
+      const last = fmtTs(s.last_ts);
+      document.getElementById('d-span').textContent = first + ' → ' + last;
+    }
+
+    // Recent values
+    renderRecentValues(data.recent_values || []);
+
+    // Savings
+    renderSavings(data.savings_estimate || {});
+
+    // Chart
+    renderDensityChart(data.daily_counts || []);
+
+  } catch(e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+function renderRecentValues(values) {
+  const tbody = document.getElementById('recent-body');
+  if (!values.length) {
+    tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Nessun dato</td></tr>';
+    return;
+  }
+  tbody.innerHTML = values.map(v => `
+    <tr>
+      <td><strong>${v.state}</strong></td>
+      <td class="text-muted small">${fmtTs(v.ts)}</td>
+    </tr>
+  `).join('');
+}
+
+function renderSavings(savings) {
+  const el = document.getElementById('savings-body');
+  if (!Object.keys(savings).length) {
+    el.innerHTML = '<p class="text-muted small">Dati insufficienti</p>';
+    return;
+  }
+  const labels = {
+    purge_30d: 'Purge 30 giorni',
+    flatten_hourly_7d: 'Flatten orario (7gg)',
+    flatten_daily_30d: 'Flatten giornaliero (30gg)',
+  };
+  el.innerHTML = Object.entries(savings).map(([k, v]) => `
+    <div class="mb-3">
+      <div class="d-flex justify-content-between small mb-1">
+        <span>${labels[k] || k}</span>
+        <strong class="text-warning">~${fmt(v.estimated_deleted)} record (${v.pct}%)</strong>
+      </div>
+      <div class="progress" style="height:8px">
+        <div class="progress-bar bg-warning" style="width:${Math.min(v.pct, 100)}%"></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderDensityChart(dailyCounts) {
+  if (densityChart) densityChart.destroy();
+  const labels = dailyCounts.map(d => d.day);
+  const values = dailyCounts.map(d => d.count);
+  densityChart = new Chart(document.getElementById('densityChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Record/giorno',
+        data: values,
+        backgroundColor: 'rgba(13, 202, 240, 0.5)',
+        borderColor: '#0dcaf0',
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true },
+        x: { grid: { display: false }, ticks: { maxTicksLimit: 15 } }
+      }
+    }
+  });
+}
+
+async function reloadChart() {
+  const days = document.getElementById('chart-days').value;
+  const data = await apiGet(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/chart?days=${days}`);
+  renderDensityChart(data);
+}
+
+function updateDetailParams() {
+  const val = document.getElementById('detail-strategy').value;
+  document.querySelectorAll('.detail-params').forEach(el => el.classList.add('d-none'));
+  const map = {
+    simple_purge: 'dp-simple',
+    temporal_decimation: 'dp-temporal',
+    rolling_average: 'dp-rolling',
+    adaptive_purge: 'dp-adaptive',
+  };
+  document.getElementById(map[val])?.classList.remove('d-none');
+  document.getElementById('strategy-desc').textContent = STRATEGY_DESCS[val] || '';
+}
+
+function getDetailParams() {
+  const strategy = document.getElementById('detail-strategy').value;
+  const params = {};
+  if (strategy === 'simple_purge') {
+    params.older_than_days = parseInt(document.getElementById('dp-simple-days').value, 10);
+  } else if (strategy === 'temporal_decimation') {
+    params.older_than_days = parseInt(document.getElementById('dp-temp-days').value, 10);
+  } else if (strategy === 'rolling_average') {
+    params.older_than_days = parseInt(document.getElementById('dp-roll-days').value, 10);
+    params.granularity = document.getElementById('dp-roll-gran').value;
+  } else if (strategy === 'adaptive_purge') {
+    params.threshold_1_days = parseInt(document.getElementById('dp-adp-t1').value, 10);
+    params.threshold_2_days = parseInt(document.getElementById('dp-adp-t2').value, 10);
+    params.threshold_3_days = parseInt(document.getElementById('dp-adp-t3').value, 10);
+    params.threshold_4_days = 36500;
+  }
+  return { strategy, params };
+}
+
+async function detailPreview() {
+  const { strategy, params } = getDetailParams();
+  try {
+    const result = await apiPost('/api/preview', {
+      strategy_type: strategy, entity_ids: [ENTITY_ID], params
+    });
+    const del = result.total_deleted ?? result.estimated_deleted ?? '?';
+    document.getElementById('dp-preview-result').innerHTML =
+      `<span class="text-info"><i class="bi bi-info-circle me-1"></i>Stima: <strong>~${fmt(del)}</strong> record eliminati/modificati</span>`;
+  } catch(e) {
+    document.getElementById('dp-preview-result').innerHTML = `<span class="text-danger">${e.message}</span>`;
+  }
+}
+
+async function detailExecute() {
+  const { strategy, params } = getDetailParams();
+  if (!confirm(`Confermi l'esecuzione di "${strategy}" su ${ENTITY_ID}?`)) return;
+  showToast('Esecuzione in corso…', 'info');
+  try {
+    const result = await apiPost('/api/execute', {
+      strategy_type: strategy, entity_ids: [ENTITY_ID], params
+    });
+    showToast(
+      result.error ? `Errore: ${result.error}` :
+      `Completato! ${fmt(result.total_deleted)} record in ${result.duration_sec}s`,
+      result.error ? 'danger' : 'success'
+    );
+    loadDetail();
+  } catch(e) {
+    showToast(`Errore: ${e.message}`, 'danger');
+  }
+}
+</script>
+{% endblock %}

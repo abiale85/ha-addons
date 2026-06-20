@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% block title %}- Dashboard{% endblock %}
+{% block page_title %}<i class="bi bi-speedometer2 me-2"></i>Dashboard{% endblock %}
+
+{% block content %}
+<!-- KPI cards row -->
+<div class="row g-3 mb-4" id="kpi-row">
+  <div class="col-6 col-md-3">
+    <div class="card kpi-card">
+      <div class="card-body">
+        <div class="kpi-label"><i class="bi bi-table me-1"></i>Stati totali</div>
+        <div class="kpi-value text-info" id="kpi-states">…</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card kpi-card">
+      <div class="card-body">
+        <div class="kpi-label"><i class="bi bi-hdd me-1"></i>Dimensione DB</div>
+        <div class="kpi-value text-warning" id="kpi-size">…</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card kpi-card">
+      <div class="card-body">
+        <div class="kpi-label"><i class="bi bi-reception-4 me-1"></i>Sensori tracciati</div>
+        <div class="kpi-value text-success" id="kpi-sensors">…</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card kpi-card">
+      <div class="card-body">
+        <div class="kpi-label"><i class="bi bi-pie-chart me-1"></i>Top 10 vs totale</div>
+        <div class="kpi-value text-danger" id="kpi-top10">…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <!-- Top sensori -->
+  <div class="col-lg-8">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-bar-chart me-2"></i>Top 10 sensori per numero di record</span>
+        <a href="{{ base_path }}/sensors" class="btn btn-sm btn-outline-primary">
+          Tutti <i class="bi bi-arrow-right"></i>
+        </a>
+      </div>
+      <div class="card-body p-0">
+        <div class="chart-container p-3">
+          <canvas id="topSensorsChart" height="220"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Distribuzione tabelle -->
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-header">
+        <i class="bi bi-pie-chart me-2"></i>Distribuzione tabelle
+      </div>
+      <div class="card-body">
+        <canvas id="tableDistChart" height="200"></canvas>
+        <div id="table-stats" class="mt-3 small"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tabella top 10 sensori -->
+<div class="card mb-4">
+  <div class="card-header">
+    <i class="bi bi-list-ol me-2"></i>Top 10 sensori — dettaglio
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover table-sm mb-0" id="top10-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Entità</th>
+            <th class="text-end">Record</th>
+            <th class="text-end">Prima registrazione</th>
+            <th class="text-end">Ultima registrazione</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="top10-body">
+          <tr><td colspan="6" class="text-center py-4 text-muted">Caricamento…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Manutenzione rapida -->
+<div class="card">
+  <div class="card-header">
+    <i class="bi bi-tools me-2"></i>Manutenzione rapida
+  </div>
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div class="maintenance-block">
+          <div class="maintenance-title">Pulisci attributi orfani</div>
+          <p class="small text-muted mb-2">
+            Rimuove record da <code>state_attributes</code> non più referenziati.
+          </p>
+          <button class="btn btn-sm btn-outline-warning" onclick="runMaintenance('cleanup-attributes')">
+            <i class="bi bi-broom me-1"></i>Esegui
+          </button>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="maintenance-block">
+          <div class="maintenance-title">VACUUM database</div>
+          <p class="small text-muted mb-2">
+            Ricompatta il file SQLite dopo eliminazioni, recupera spazio su disco.
+          </p>
+          <button class="btn btn-sm btn-outline-info" onclick="runMaintenance('vacuum')">
+            <i class="bi bi-arrow-repeat me-1"></i>Esegui VACUUM
+          </button>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="maintenance-block">
+          <div class="maintenance-title">Purge statistics short-term</div>
+          <p class="small text-muted mb-2">
+            Elimina statistiche a breve termine più vecchie di
+            <input type="number" id="st-days" value="90" min="7" class="form-control form-control-sm d-inline-block w-auto"> giorni.
+          </p>
+          <button class="btn btn-sm btn-outline-danger" onclick="purgeStatistics()">
+            <i class="bi bi-trash me-1"></i>Purge
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  loadDashboard();
+});
+
+async function loadDashboard() {
+  try {
+    const data = await apiGet('/api/overview');
+    if (data.error) { showToast(data.error, 'danger'); return; }
+
+    // KPI
+    document.getElementById('kpi-states').textContent = fmt(data.total_states);
+    document.getElementById('kpi-size').textContent = data.db_size_human;
+    document.getElementById('kpi-sensors').textContent = fmt(data.table_counts?.states ? data.top_sensors?.length : '?');
+    document.getElementById('kpi-top10').textContent = data.top_10_pct + '%';
+    document.getElementById('db-size-val').textContent = data.db_size_human;
+
+    // Top sensors chart
+    const top = data.top_sensors || [];
+    renderBarChart('topSensorsChart', top);
+
+    // Table dist chart
+    renderTableDist('tableDistChart', data.table_counts);
+
+    // Top 10 table
+    renderTop10Table(top);
+
+  } catch(e) {
+    showToast('Errore caricamento dashboard: ' + e.message, 'danger');
+  }
+}
+
+function renderBarChart(id, sensors) {
+  const labels = sensors.map(s => s.entity_id.split('.').pop());
+  const values = sensors.map(s => s.record_count);
+  const colors = values.map((v, i) => `hsl(${200 + i * 18}, 70%, 55%)`);
+
+  new Chart(document.getElementById(id), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ data: values, backgroundColor: colors, borderRadius: 4 }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { grid: { color: 'rgba(255,255,255,0.05)' } },
+        x: { grid: { display: false }, ticks: { maxRotation: 35 } }
+      }
+    }
+  });
+}
+
+function renderTableDist(id, counts) {
+  if (!counts) return;
+  const entries = Object.entries(counts).filter(([,v]) => v > 0);
+  const colors = ['#0dcaf0','#ffc107','#20c997','#6f42c1','#fd7e14'];
+  new Chart(document.getElementById(id), {
+    type: 'doughnut',
+    data: {
+      labels: entries.map(([k]) => k),
+      datasets: [{ data: entries.map(([,v]) => v), backgroundColor: colors }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { color: '#adb5bd', boxWidth: 12 } } }
+    }
+  });
+
+  const el = document.getElementById('table-stats');
+  el.innerHTML = entries.map(([k, v]) =>
+    `<div class="d-flex justify-content-between"><span class="text-muted">${k}</span><strong>${fmt(v)}</strong></div>`
+  ).join('');
+}
+
+function renderTop10Table(sensors) {
+  const tbody = document.getElementById('top10-body');
+  if (!sensors.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">Nessun dato</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sensors.map((s, i) => `
+    <tr>
+      <td><span class="badge bg-secondary">${i + 1}</span></td>
+      <td><code class="entity-id">${s.entity_id}</code></td>
+      <td class="text-end"><span class="badge bg-info text-dark">${fmt(s.record_count)}</span></td>
+      <td class="text-end text-muted small">${fmtTs(s.first_seen)}</td>
+      <td class="text-end text-muted small">${fmtTs(s.last_seen)}</td>
+      <td class="text-end">
+        <a href="${BASE_PATH}/sensors/${encodeURIComponent(s.entity_id)}"
+           class="btn btn-xs btn-outline-primary">
+          <i class="bi bi-zoom-in"></i>
+        </a>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function runMaintenance(action) {
+  const label = action === 'vacuum' ? 'VACUUM' : 'Pulizia attributi';
+  if (!confirm(`Confermi l'esecuzione di: ${label}?`)) return;
+  try {
+    showToast(`Avvio ${label}…`, 'info');
+    const result = await apiPost(`/api/maintenance/${action}`, {});
+    showToast(
+      result.error
+        ? `Errore: ${result.error}`
+        : `${label} completato. Eliminati: ${fmt(result.deleted ?? 0)}`,
+      result.error ? 'danger' : 'success'
+    );
+  } catch(e) {
+    showToast(`Errore: ${e.message}`, 'danger');
+  }
+}
+
+async function purgeStatistics() {
+  const days = parseInt(document.getElementById('st-days').value, 10);
+  if (!confirm(`Eliminare statistics_short_term più vecchie di ${days} giorni?`)) return;
+  try {
+    const result = await apiPost('/api/maintenance/purge-statistics', { older_than_days: days });
+    showToast(
+      result.error ? `Errore: ${result.error}` : `Eliminati ${fmt(result.deleted)} record`,
+      result.error ? 'danger' : 'success'
+    );
+  } catch(e) {
+    showToast(`Errore: ${e.message}`, 'danger');
+  }
+}
+</script>
+{% endblock %}

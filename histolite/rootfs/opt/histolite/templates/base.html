@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="it" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HistoLite {% block title %}{% endblock %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="{{ base_path }}/static/css/style.css" rel="stylesheet">
+</head>
+<body>
+
+<!-- Sidebar -->
+<div class="sidebar d-flex flex-column">
+  <div class="sidebar-brand">
+    <i class="bi bi-database-gear me-2"></i>
+    <span>HistoLite</span>
+  </div>
+  <nav class="sidebar-nav flex-grow-1">
+    <a href="{{ base_path }}/dashboard"
+       class="nav-link {% if active == 'dashboard' %}active{% endif %}">
+      <i class="bi bi-speedometer2"></i> Dashboard
+    </a>
+    <a href="{{ base_path }}/sensors"
+       class="nav-link {% if active == 'sensors' %}active{% endif %}">
+      <i class="bi bi-reception-4"></i> Sensori
+    </a>
+    <a href="{{ base_path }}/strategies"
+       class="nav-link {% if active == 'strategies' %}active{% endif %}">
+      <i class="bi bi-sliders"></i> Strategie
+    </a>
+    <a href="{{ base_path }}/jobs"
+       class="nav-link {% if active == 'jobs' %}active{% endif %}">
+      <i class="bi bi-clock-history"></i> Cronologia
+    </a>
+  </nav>
+  <div class="sidebar-footer text-muted small">
+    <i class="bi bi-hdd-stack me-1"></i>
+    <span id="sb-db-path" title="{{ db_path }}">{{ db_path|truncate(28) }}</span>
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="main-content">
+  <!-- Top bar -->
+  <div class="topbar d-flex align-items-center justify-content-between">
+    <div class="d-flex align-items-center gap-2">
+      <button class="btn btn-sm btn-outline-secondary sidebar-toggle d-xl-none"
+              onclick="document.querySelector('.sidebar').classList.toggle('show')">
+        <i class="bi bi-list"></i>
+      </button>
+      <h5 class="mb-0 text-white">{% block page_title %}{% endblock %}</h5>
+    </div>
+    <div class="d-flex align-items-center gap-3">
+      <span class="badge bg-secondary" id="db-size-badge">
+        <i class="bi bi-hdd me-1"></i><span id="db-size-val">…</span>
+      </span>
+      <span class="text-muted small">{{ now }}</span>
+    </div>
+  </div>
+
+  <!-- Page content -->
+  <div class="content-area">
+    {% block content %}{% endblock %}
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="toast-container"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+  const BASE_PATH = "{{ base_path }}";
+</script>
+<script src="{{ base_path }}/static/js/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
