@@ -1,0 +1,12 @@
+# Forza LF per script bash nel container
+*.sh text eol=lf
+rootfs/** text eol=lf
+
+# Mantieni CRLF per file Windows
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Binary
+*.db binary
+*.db-wal binary
+*.db-shm binary
