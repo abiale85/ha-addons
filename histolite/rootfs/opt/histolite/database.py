@@ -56,11 +56,13 @@ class HaDatabase:
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_last_updated ON states(last_updated) WHERE last_updated IS NOT NULL")
             except Exception as e:
                 logger.debug(f"Index creation: {e}")
-                try:
-                    conn.execute("CREATE INDEX IF NOT EXISTS idx_states_meta_entity_id ON states_meta(entity_id)")
-                    conn.execute("CREATE INDEX IF NOT EXISTS idx_states_metadata_id ON states(metadata_id) WHERE metadata_id IS NOT NULL")
-                except Exception as e:
-                    logger.debug(f"states_meta index creation: {e}")
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_states_meta_entity_id ON states_meta(entity_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_states_metadata_id ON states(metadata_id) WHERE metadata_id IS NOT NULL")
+            except Exception as e:
+                logger.debug(f"states_meta index creation: {e}")
+        return conn
+
     def get_schema_info(self) -> dict:
         """Rileva la versione dello schema del database HA.
 

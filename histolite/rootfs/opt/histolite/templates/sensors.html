@@ -11,14 +11,14 @@
         <div class="input-group input-group-sm">
           <span class="input-group-text"><i class="bi bi-search"></i></span>
           <input type="text" class="form-control" id="search-input"
-                 placeholder="Cerca entitÃ  (es. sensor.power, climate…)"
+                 placeholder="Cerca entità (es. sensor.power, climate…)"
                  value="{{ search }}">
         </div>
       </div>
       <div class="col-md-3">
         <select class="form-select form-select-sm" id="sort-select">
           <option value="count" {% if sort == 'count' %}selected{% endif %}>Ordina: più record</option>
-          <option value="entity" {% if sort == 'entity' %}selected{% endif %}>Ordina: nome entitÃ </option>
+          <option value="entity" {% if sort == 'entity' %}selected{% endif %}>Ordina: nome entità</option>
         </select>
       </div>
       <div class="col-md-2">
@@ -80,7 +80,7 @@
                   <input type="checkbox" class="form-check-input" id="select-all"
                          onchange="toggleSelectAll(this)">
                 </th>
-                <th>EntitÃ </th>
+                <th>Entità</th>
                 <th>Dominio</th>
                 <th class="text-end">Record</th>
                 <th class="text-end">Barra</th>
@@ -152,7 +152,7 @@
           <label class="form-label">Soglia appiattimento orario</label>
           <div class="input-group mb-2">
             <input type="number" class="form-control" id="q-temp-days" value="14" min="1">
-            <span class="input-group-text">giorni (giornaliero = 2Ã—)</span>
+            <span class="input-group-text">giorni (giornaliero = 2×)</span>
           </div>
         </div>
         <div id="quick-params-rolling" class="strategy-params d-none">
@@ -162,7 +162,7 @@
             <span class="input-group-text">giorni</span>
           </div>
           <div>
-            <label class="form-label">GranularitÃ </label>
+            <label class="form-label">Granularità</label>
             <select class="form-select" id="q-roll-gran">
               <option value="hour">Oraria</option>
               <option value="day">Giornaliera</option>
@@ -293,11 +293,11 @@ async function loadFromOverviewCache() {
       // Overview vuota â†’ carica lista completa
       document.getElementById('load-more-row').classList.remove('d-none');
       tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">Nessun dato in cache. Clicca "Carica lista completa" qui sotto.</td></tr>';
-      document.getElementById('sensors-count').textContent = '0 entitÃ ';
+      document.getElementById('sensors-count').textContent = '0 entità';
       return;
     }
     sortAndRender();
-    document.getElementById('sensors-count').textContent = allSensors.length + ' top entitÃ ';
+    document.getElementById('sensors-count').textContent = allSensors.length + ' top entità';
     document.getElementById('load-more-row').classList.remove('d-none');
   } catch(e) {
     tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger">${e.message}</td></tr>`;
@@ -323,12 +323,12 @@ async function loadFullList() {
   try {
     const sort = document.getElementById('sort-select').value;
     allSensors = await apiFetch(
-      `${BASE_PATH}/api/sensors?limit=${limit}&sort=${sort}&search=${encodeURIComponent(search)}`,
+      `/api/sensors?limit=${limit}&sort=${sort}&search=${encodeURIComponent(search)}`,
       { signal: sensorLoadController.signal }
-    ).then(r => r.json());
+    );
     
     sortAndRender();
-    document.getElementById('sensors-count').textContent = allSensors.length + ' entitÃ ';
+    document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
   } catch(e) {
     if (e.name === 'AbortError') {
       tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-warning"><i class="bi bi-exclamation-triangle me-1"></i>Caricamento annullato</td></tr>';
@@ -359,13 +359,13 @@ async function loadSensors() {
   
   try {
     const entities = await apiFetch(
-      `${BASE_PATH}/api/sensors/list?search=${encodeURIComponent(search)}`,
+      `/api/sensors/list?search=${encodeURIComponent(search)}`,
       { signal: sensorLoadController.signal }
-    ).then(r => r.json());
+    );
     
     allSensors = entities.map(e => ({ entity_id: e.entity_id, record_count: 0 }));
     sortAndRender();
-    document.getElementById('sensors-count').textContent = allSensors.length + ' entitÃ ';
+    document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
     // Offri di caricare con conteggi
     if (allSensors.length > 0) {
       document.getElementById('load-more-row').classList.remove('d-none');
@@ -461,8 +461,8 @@ async function selectDetailRow(row, eid) {
   
   try {
     const [stats, recent] = await Promise.all([
-      apiFetch(`${BASE_PATH}/api/sensors/${encodeURIComponent(eid)}`, { signal: detailController.signal }).then(r => r.json()),
-      apiFetch(`${BASE_PATH}/api/sensors/${encodeURIComponent(eid)}/values?per_page=5`, { signal: detailController.signal }).then(r => r.json()),
+      apiFetch(`/api/sensors/${encodeURIComponent(eid)}`, { signal: detailController.signal }),
+      apiFetch(`/api/sensors/${encodeURIComponent(eid)}/values?per_page=5`, { signal: detailController.signal }),
     ]);
     
     const firstSeen = fmtTs(stats.first_ts || stats.first_seen);
@@ -597,7 +597,7 @@ async function runPreview() {
     const result = await apiPost('/api/preview', { strategy_type: strategy, entity_ids, params });
     const del = result.total_deleted ?? result.estimated_deleted ?? '?';
     document.getElementById('preview-result').innerHTML =
-      `<span class="text-info"><i class="bi bi-info-circle me-1"></i>Stima: <strong>${fmt(del)}</strong> record su ${entity_ids.length} entitÃ </span>`;
+      `<span class="text-info"><i class="bi bi-info-circle me-1"></i>Stima: <strong>${fmt(del)}</strong> record su ${entity_ids.length} entità</span>`;
   } catch(e) {
     document.getElementById('preview-result').innerHTML = `<span class="text-danger">${e.message}</span>`;
   }
@@ -607,7 +607,7 @@ async function executeQuickStrategy() {
   const { strategy, params } = getQuickParams();
   const entity_ids = [...selectedIds];
   if (!entity_ids.length) { showToast('Seleziona almeno un sensore', 'warning'); return; }
-  if (!confirm(`Confermi "${strategy}" su ${entity_ids.length} entitÃ ?\nL'operazione non è reversibile (salvo backup).`)) return;
+  if (!confirm(`Confermi "${strategy}" su ${entity_ids.length} entità?\nL'operazione non è reversibile (salvo backup).`)) return;
   bootstrap.Modal.getInstance(document.getElementById('quickPurgeModal')).hide();
   showToast('Esecuzione in corso…', 'info');
   try {
