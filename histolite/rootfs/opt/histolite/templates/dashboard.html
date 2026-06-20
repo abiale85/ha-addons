@@ -192,6 +192,23 @@ async function loadDashboard() {
     console.log('[HistoLite] Risposta overview:', data);
     if (data.error) { showToast(data.error, 'danger'); return; }
 
+    // Avviso schema non riconosciuto - mostrato come banner permanente
+    if (data.schema_warning) {
+      let banner = document.getElementById('schema-warning-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'schema-warning-banner';
+        banner.className = 'alert alert-danger d-flex align-items-start gap-2 mb-3';
+        banner.setAttribute('role', 'alert');
+        document.getElementById('kpi-row').insertAdjacentElement('beforebegin', banner);
+      }
+      banner.innerHTML = `<i class="bi bi-exclamation-octagon-fill flex-shrink-0 mt-1"></i>
+        <div><strong>Schema database non riconosciuto.</strong><br>
+        <span class="small">${data.schema_warning}</span><br>
+        <span class="small text-warning">Tutte le operazioni di scrittura sono bloccate fino alla risoluzione.</span></div>`;
+      showToast('⚠ Schema DB non riconosciuto: scritture bloccate.', 'danger');
+    }
+
     // KPI
     document.getElementById('kpi-states').textContent = fmt(data.total_states);
     document.getElementById('kpi-size').textContent = data.db_size_human;

@@ -17,7 +17,7 @@ def get_db_overview(db: HaDatabase) -> dict:
         schema = db.get_schema_info()
         
         total_states = table_counts.get("states", 0)
-        logger.info(f"DB overview: total_states={total_states}, schema={schema['timestamp_col']}")
+        logger.info(f"DB overview: total_states={total_states}, schema={schema['timestamp_col']}, schema_type={schema.get('schema_type','?')}")
         
         top_sensors = db.get_top_sensors(limit=10)
         logger.info(f"Top sensori recuperati: {len(top_sensors)} risultati")
@@ -27,16 +27,25 @@ def get_db_overview(db: HaDatabase) -> dict:
         top_10_states = sum(s["record_count"] for s in top_sensors)
         top_10_pct = (top_10_states / total_states * 100) if total_states > 0 else 0
 
-        return {
+        schema_type = schema.get("schema_type", "unknown")
+        result = {
             "db_size_bytes": db_size,
             "db_size_human": _human_size(db_size),
             "table_counts": table_counts,
             "schema": schema,
+            "schema_type": schema_type,
             "total_states": total_states,
             "top_10_states": top_10_states,
             "top_10_pct": round(top_10_pct, 1),
             "top_sensors": top_sensors,
         }
+        if schema_type == "unknown":
+            result["schema_warning"] = (
+                "Schema del database non riconosciuto. "
+                "Tutte le operazioni di scrittura sono bloccate. "
+                f"Colonne rilevate in 'states': {sorted(schema.get('columns', []))}."
+            )
+        return result
     except Exception as e:
         logger.error(f"Errore analisi DB: {e}", exc_info=True)
         return {"error": str(e)}

@@ -11,7 +11,7 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 
-from database import HaDatabase
+from database import HaDatabase, SchemaUnrecognizedError
 from analyzer import get_db_overview, analyze_sensor
 from strategies import execute_strategy, STRATEGY_LIST
 from config_manager import ConfigManager
@@ -51,6 +51,20 @@ config_manager = ConfigManager(DATA_PATH)
 cache = CacheManager(DATA_PATH)
 
 logger.info(f"HistoLite avviato - DB: {DB_PATH} - Port: {PORT} - Ingress: {INGRESS_PATH or '(nessuno)'}")
+
+
+# ---------------------------------------------------------------------------
+# Gestione errori globali
+# ---------------------------------------------------------------------------
+
+@app.errorhandler(SchemaUnrecognizedError)
+def handle_schema_error(e):
+    """Schema non riconosciuto: blocca qualsiasi scrittura e notifica l'UI."""
+    logger.critical(f"SchemaUnrecognizedError: {e}")
+    return jsonify({
+        "error": str(e),
+        "error_type": "schema_unrecognized",
+    }), 503
 
 
 def _get_ingress_path():

@@ -13,6 +13,12 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+class SchemaUnrecognizedError(RuntimeError):
+    """Sollevata quando lo schema del DB non è riconoscibile.
+    Blocca qualsiasi operazione di lettura avanzata o scrittura."""
+    pass
+
+
 class HaDatabase:
     """Gestisce la connessione e le operazioni sul database HA."""
 
@@ -56,7 +62,14 @@ class HaDatabase:
                 except Exception as e:
                     logger.debug(f"states_meta index creation: {e}")
     def get_schema_info(self) -> dict:
-        """Rileva la versione dello schema del database HA."""
+        """Rileva la versione dello schema del database HA.
+
+        schema_type:
+          'legacy'       - entity_id direttamente in states (HA < recorder 23)
+          'modern'       - entity_id in states_meta via metadata_id (HA >= recorder 23)
+          'transitional' - entrambe le colonne presenti (migrazione in corso), trattato come legacy
+          'unknown'      - schema non riconosciuto: nessuna operazione di scrittura consentita
+        """
         if self._schema:
             return self._schema
         with self._connect(read_only=True) as conn:
@@ -64,14 +77,42 @@ class HaDatabase:
             cols = {row["name"] for row in cur.fetchall()}
             uses_ts = "last_updated_ts" in cols
             has_attributes_id = "attributes_id" in cols
-            # Nuovo schema HA (recorder >= 23): entity_id spostato in states_meta
             has_metadata = "metadata_id" in cols
             has_entity_id_in_states = "entity_id" in cols
+
+            # Determina il tipo di schema
+            if has_entity_id_in_states and not has_metadata:
+                schema_type = "legacy"
+            elif has_metadata and not has_entity_id_in_states:
+                # Verifica che states_meta esista davvero
+                try:
+                    sm = conn.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='table' AND name='states_meta'"
+                    ).fetchone()
+                    schema_type = "modern" if sm else "unknown"
+                except Exception:
+                    schema_type = "unknown"
+            elif has_entity_id_in_states and has_metadata:
+                # Migrazione in corso: entrambe le colonne presenti
+                schema_type = "transitional"   # trattato come legacy in _use_meta_schema
+            else:
+                # Nessuna delle due → schema non riconosciuto
+                schema_type = "unknown"
+
+            if schema_type == "unknown":
+                logger.error(
+                    f"Schema del database non riconosciuto! "
+                    f"Colonne states: {sorted(cols)}. "
+                    f"Operazioni di scrittura bloccate."
+                )
+
             self._schema = {
                 "uses_ts": uses_ts,
                 "has_attributes_id": has_attributes_id,
                 "has_metadata": has_metadata,
                 "has_entity_id_in_states": has_entity_id_in_states,
+                "schema_type": schema_type,
                 "timestamp_col": "last_updated_ts" if uses_ts else "last_updated",
                 "columns": list(cols),
             }
@@ -104,7 +145,25 @@ class HaDatabase:
     def _use_meta_schema(self) -> bool:
         """True se il DB usa il nuovo schema con states_meta (entity_id separato)."""
         schema = self.get_schema_info()
-        return schema.get("has_metadata", False) and not schema.get("has_entity_id_in_states", True)
+        return schema.get("schema_type") == "modern"
+
+    def _validate_schema_for_write(self) -> None:
+        """Verifica che lo schema sia riconosciuto prima di qualsiasi scrittura.
+
+        Solleva SchemaUnrecognizedError se lo schema è 'unknown'.
+        Questa eccezione viene propagata fino agli endpoint Flask che la
+        restituiscono come errore JSON visibile nelle notifiche dell'UI.
+        Non viene mai silenziata internamente.
+        """
+        schema = self.get_schema_info()
+        if schema.get("schema_type") == "unknown":
+            cols = schema.get("columns", [])
+            raise SchemaUnrecognizedError(
+                f"Schema del database non riconosciuto "
+                f"(colonne rilevate in 'states': {sorted(cols)}). "
+                f"Nessuna operazione di scrittura o modifica viene eseguita. "
+                f"Aggiorna HistoLite o apri una issue allegando questo messaggio."
+            )
 
     # ------------------------------------------------------------------
     # Statistiche generali
@@ -481,6 +540,7 @@ class HaDatabase:
         Elimina tutti i record di un'entità più vecchi di N giorni.
         Restituisce statistiche sull'operazione.
         """
+        self._validate_schema_for_write()
         schema = self.get_schema_info()
         use_meta = self._use_meta_schema()
         cond, param = self._ts_filter("s", older_than_days)
@@ -558,6 +618,7 @@ class HaDatabase:
         Appiattisce la storia di un'entità: per ogni bucket temporale
         mantiene un solo record con la media dei valori.
         """
+        self._validate_schema_for_write()
         schema = self.get_schema_info()
         use_meta = self._use_meta_schema()
 
@@ -706,6 +767,7 @@ class HaDatabase:
         self, older_than_days: int, entity_ids: Optional[list] = None, dry_run: bool = False
     ) -> dict:
         """Elimina record da statistics_short_term più vecchi di N giorni."""
+        self._validate_schema_for_write()
         import time
         cutoff = time.time() - older_than_days * 86400
 
@@ -757,6 +819,7 @@ class HaDatabase:
 
     def cleanup_orphaned_attributes(self, dry_run: bool = False) -> dict:
         """Elimina righe orfane da state_attributes."""
+        self._validate_schema_for_write()
         with self._connect(read_only=dry_run) as conn:
             try:
                 count_row = conn.execute("""
@@ -794,6 +857,7 @@ class HaDatabase:
         - Schema legacy: entity_id IS NULL o vuoto
         - Nuovo schema (states_meta): metadata_id IS NULL o orfano (non in states_meta)
         """
+        self._validate_schema_for_write()
         use_meta = self._use_meta_schema()
         with self._connect(read_only=dry_run) as conn:
             try:
@@ -949,6 +1013,7 @@ class HaDatabase:
         """Elimina record specifici per state_id. Restituisce il numero eliminati."""
         if not state_ids:
             return 0
+        self._validate_schema_for_write()
         with self._connect(read_only=False) as conn:
             placeholders = ",".join("?" * len(state_ids))
             # Annulla riferimenti old_state_id prima di eliminare
@@ -975,6 +1040,7 @@ class HaDatabase:
           - state_blacklist: list[str] (stati specifici da eliminare, es. 'unavailable')
         Timeout: 10 sec.
         """
+        self._validate_schema_for_write()
         conditions, params = self._build_anomaly_conditions(entity_id, criteria)
         if not conditions:
             return {"count": 0, "samples": [], "error": "Nessun criterio valido specificato"}
@@ -1010,6 +1076,7 @@ class HaDatabase:
 
     def delete_anomalies(self, entity_id: str, criteria: dict, batch_size: int = 5000) -> dict:
         """Elimina i record anomali secondo i criteri dati. Ritorna conteggio eliminati."""
+        self._validate_schema_for_write()
         conditions, params = self._build_anomaly_conditions(entity_id, criteria)
         if not conditions:
             return {"deleted": 0, "error": "Nessun criterio valido"}
