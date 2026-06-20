@@ -22,19 +22,17 @@ from config_manager import ConfigManager
 # ---------------------------------------------------------------------------
 
 class IngressPathMiddleware:
-    """Middleware che rimuove il prefisso Ingress dalle richieste."""
+    """Middleware che configura SCRIPT_NAME per Ingress reverse proxy."""
     def __init__(self, app, ingress_path):
         self.app = app
         self.ingress_path = ingress_path
     
     def __call__(self, environ, start_response):
-        if self.ingress_path and environ['PATH_INFO'].startswith(self.ingress_path):
-            # Rimuove il prefisso dall'URL
-            environ['PATH_INFO'] = environ['PATH_INFO'][len(self.ingress_path):]
-            if not environ['PATH_INFO']:
-                environ['PATH_INFO'] = '/'
-            # Salva il prefisso per url_for
+        # Ingress è un reverse proxy che non include il prefisso in PATH_INFO
+        # Impostiamo SCRIPT_NAME per url_for()
+        if self.ingress_path:
             environ['SCRIPT_NAME'] = self.ingress_path
+            logger.debug(f"Ingress middleware: SCRIPT_NAME={self.ingress_path}, PATH_INFO={environ['PATH_INFO']}")
         return self.app(environ, start_response)
 
 # ---------------------------------------------------------------------------
@@ -78,15 +76,37 @@ def inject_globals():
     }
 
 
+# Logging all'avvio
+logger.info(f"HistoLite avviato - DB: {DB_PATH} - Port: {PORT}")
+logger.info(f"INGRESS_PATH={INGRESS_PATH}")
+
+
+# ---------------------------------------------------------------------------
+# Endpoint di debug (solo con log level debug)
+# ---------------------------------------------------------------------------
+
+@app.route("/_debug")
+def debug_info():
+    """Endpoint per debuggare la configurazione Ingress."""
+    return jsonify({
+        "INGRESS_PATH": INGRESS_PATH,
+        "SCRIPT_NAME": request.environ.get("SCRIPT_NAME", ""),
+        "PATH_INFO": request.environ.get("PATH_INFO", ""),
+        "REQUEST_URL": request.url,
+        "REQUEST_BASE_URL": request.base_url,
+        "REQUEST_HOST": request.host,
+        "url_for_dashboard": url_for("dashboard"),
+    })
+
+
 # ---------------------------------------------------------------------------
 # Pagine HTML
 # ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
-    # Redirige a /dashboard, aggiungendo il prefisso Ingress se presente
-    dashboard_url = (INGRESS_PATH + "/dashboard") if INGRESS_PATH else "/dashboard"
-    return redirect(dashboard_url)
+    # url_for() con SCRIPT_NAME impostato genera automaticamente l'URL corretto
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/dashboard")
