@@ -148,13 +148,14 @@ class HaDatabase:
     def _use_meta_schema(self) -> bool:
         """True se il DB usa il nuovo schema con states_meta (entity_id separato).
         
-        Include anche 'transitional': in HA recorder v23+ la migrazione mantiene
-        ENTRAMBE le colonne (entity_id + metadata_id) ma usa states_meta come
-        sorgente autoritativa. Trattare transitional come legacy causerebbe
-        query su entity_id = NULL → sensori vuoti e falsi 22M record "corrotti".
+        Solo per 'modern': in HA recorder v23+ con migrazione completata.
+        'transitional' viene trattato come legacy perché i dati storici hanno
+        entity_id impostato mentre states_meta potrebbe avere solo le entità
+        registrate dopo la migrazione (poche). Usare states_meta causerebbe
+        sensori vuoti e query incomplete sui dati storici.
         """
         schema = self.get_schema_info()
-        return schema.get("schema_type") in ("modern", "transitional")
+        return schema.get("schema_type") == "modern"
 
     def _validate_schema_for_write(self) -> None:
         """Verifica che lo schema sia riconosciuto prima di qualsiasi scrittura.
@@ -982,11 +983,20 @@ class HaDatabase:
         with self._connect(read_only=dry_run) as conn:
             try:
                 if use_meta:
-                    # Schema modern o transitional: record senza metadata_id valido
+                    # Schema modern: record senza metadata_id valido
                     count_row = conn.execute(
                         "SELECT COUNT(*) AS c FROM states "
                         "WHERE metadata_id IS NULL "
                         "OR metadata_id NOT IN (SELECT metadata_id FROM states_meta)"
+                    ).fetchone()
+                elif schema_type == "transitional":
+                    # Schema transitional: entrambe le colonne presenti.
+                    # Solo record senza NESSUN identificatore valido sono corrotti.
+                    # NON eliminare record con entity_id=NULL se hanno metadata_id valido.
+                    count_row = conn.execute(
+                        "SELECT COUNT(*) AS c FROM states "
+                        "WHERE (entity_id IS NULL OR entity_id = '') "
+                        "AND (metadata_id IS NULL)"
                     ).fetchone()
                 else:
                     # Schema legacy puro: record senza entity_id
@@ -1014,6 +1024,13 @@ class HaDatabase:
                         "WHERE metadata_id IS NULL "
                         "OR metadata_id NOT IN (SELECT metadata_id FROM states_meta)"
                     )
+                elif schema_type == "transitional":
+                    condition = "(entity_id IS NULL OR entity_id = '') AND metadata_id IS NULL"
+                    conn.execute(
+                        f"UPDATE states SET old_state_id = NULL "
+                        f"WHERE old_state_id IN (SELECT state_id FROM states WHERE {condition})"
+                    )
+                    conn.execute(f"DELETE FROM states WHERE {condition}")
                 else:
                     conn.execute(
                         "UPDATE states SET old_state_id = NULL "
