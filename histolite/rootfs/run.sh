@@ -56,7 +56,7 @@ exec gunicorn \
   --max-requests 200 \
   --max-requests-jitter 30 \
   --timeout 120 \
-  --keepalive 2 \
+  --keep-alive 2 \
   --log-level "${LOG_LEVEL:-info}" \
   --access-logfile - \
   --error-logfile - \
