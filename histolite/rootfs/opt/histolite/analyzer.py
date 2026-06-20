@@ -17,6 +17,10 @@ def get_db_overview(db: HaDatabase) -> dict:
         schema = db.get_schema_info()
         top_sensors = db.get_top_sensors(limit=10)
 
+        logger.info(f"Top sensori recuperati: {len(top_sensors)} risultati")
+        if top_sensors:
+            logger.debug(f"Primi sensori: {[s['entity_id'] for s in top_sensors[:3]]}")
+
         total_states = table_counts.get("states", 0)
         top_10_states = sum(s["record_count"] for s in top_sensors)
         top_10_pct = (top_10_states / total_states * 100) if total_states > 0 else 0
@@ -32,7 +36,7 @@ def get_db_overview(db: HaDatabase) -> dict:
             "top_sensors": top_sensors,
         }
     except Exception as e:
-        logger.error(f"Errore analisi DB: {e}")
+        logger.error(f"Errore analisi DB: {e}", exc_info=True)
         return {"error": str(e)}
 
 

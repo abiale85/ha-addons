@@ -170,6 +170,7 @@ async function loadDashboard() {
 
     // Top sensors chart
     const top = data.top_sensors || [];
+    console.log('[HistoLite] Top sensors ricevuti:', top.length, top);
     renderBarChart('topSensorsChart', top);
 
     // Table dist chart
@@ -191,11 +192,17 @@ async function loadDashboard() {
 }
 
 function renderBarChart(id, sensors) {
+  const canvas = document.getElementById(id);
+  if (!sensors || sensors.length === 0) {
+    console.warn('[HistoLite] renderBarChart: nessun dato sensori');
+    canvas.parentElement.innerHTML = '<div class="text-center text-muted py-5">Nessun dato sensori disponibile</div>';
+    return;
+  }
   const labels = sensors.map(s => s.entity_id.split('.').pop());
   const values = sensors.map(s => s.record_count);
   const colors = values.map((v, i) => `hsl(${200 + i * 18}, 70%, 55%)`);
 
-  new Chart(document.getElementById(id), {
+  new Chart(canvas, {
     type: 'bar',
     data: {
       labels,

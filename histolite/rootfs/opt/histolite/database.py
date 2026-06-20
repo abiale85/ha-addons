@@ -141,7 +141,9 @@ class HaDatabase:
         search_pattern = f"%{search}%"
         with self._connect(read_only=True) as conn:
             rows = conn.execute(query, (search_pattern, limit)).fetchall()
-            return [dict(r) for r in rows]
+            results = [dict(r) for r in rows]
+            logger.debug(f"get_top_sensors: trovati {len(results)} sensori con pattern '{search}'")
+            return results
 
     def get_sensor_stats(self, entity_id: str) -> Optional[dict]:
         """Statistiche dettagliate per un singolo sensore."""
