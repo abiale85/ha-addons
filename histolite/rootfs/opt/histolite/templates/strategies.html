@@ -267,7 +267,7 @@ window.addEventListener('beforeunload', () => pageController.abort());
 document.addEventListener('DOMContentLoaded', async () => {
   updateFormParams();
   try {
-    allSensorsList = await apiGet('/api/sensors?limit=500');
+    allSensorsList = await apiFetch('/api/sensors/list', { signal: pageController.signal });
     setupEntitySearch();
   } catch(e) {
     if (e.name !== 'AbortError') console.error('[HistoLite] Errore caricamento sensori:', e);
@@ -309,7 +309,7 @@ function setupEntitySearch() {
       `<button type="button" class="list-group-item list-group-item-action list-group-item-dark py-1 small"
                onclick="addEntity('${s.entity_id}')">
          <code>${s.entity_id}</code>
-         <span class="badge bg-secondary float-end">${fmt(s.record_count)}</span>
+         <span class="badge bg-secondary float-end">${s.record_count ? fmt(s.record_count) : ''}</span>
        </button>`
     ).join('');
     suggestions.classList.remove('d-none');
