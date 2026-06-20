@@ -297,6 +297,17 @@ def api_sensor_chart(entity_id):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/sensors/<path:entity_id>/value-range")
+def api_sensor_value_range(entity_id):
+    """Restituisce il range di valori accettabili per un sensore."""
+    try:
+        data = db.get_sensor_value_range(entity_id)
+        return jsonify(data)
+    except Exception as e:
+        logger.error(f"Errore api/sensors/{entity_id}/value-range: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # ---------------------------------------------------------------------------
 # API - Strategie
 # ---------------------------------------------------------------------------

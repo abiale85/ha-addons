@@ -107,6 +107,7 @@
             <option value="temporal_decimation">Decimazione Temporale</option>
             <option value="rolling_average">Media Mobile</option>
             <option value="adaptive_purge">Purge Adattivo</option>
+            <option value="outlier_purge">Rimozione Anomalie</option>
           </select>
           <div class="form-text" id="strategy-desc"></div>
         </div>
@@ -165,6 +166,48 @@
             </div>
           </div>
         </div>
+        <!-- Params outlier -->
+        <div id="dp-outlier" class="detail-params d-none">
+          <div class="alert alert-info alert-sm py-2 mb-3" role="alert">
+            <i class="bi bi-info-circle me-2"></i>
+            <small id="outlier-range-info">Caricamento intervallo valori...</small>
+          </div>
+          <div class="form-check form-check-inline mb-3">
+            <input type="checkbox" class="form-check-input" id="dp-outlier-neg">
+            <label class="form-check-label" for="dp-outlier-neg">
+              Elimina valori negativi
+            </label>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Minimo accettabile</label>
+            <div class="input-group input-group-sm">
+              <input type="number" class="form-control" id="dp-outlier-min" step="any">
+              <button class="btn btn-outline-secondary" type="button" onclick="fillOutlierFromRange('min')">
+                <i class="bi bi-arrow-left"></i>Auto
+              </button>
+            </div>
+            <small class="form-text text-muted" id="outlier-min-hint"></small>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Massimo accettabile</label>
+            <div class="input-group input-group-sm">
+              <input type="number" class="form-control" id="dp-outlier-max" step="any">
+              <button class="btn btn-outline-secondary" type="button" onclick="fillOutlierFromRange('max')">
+                <i class="bi bi-arrow-left"></i>Auto
+              </button>
+            </div>
+            <small class="form-text text-muted" id="outlier-max-hint"></small>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">N. Deviazioni Standard (per outlier statistici)</label>
+            <input type="number" class="form-control form-control-sm" id="dp-outlier-std" step="0.1" min="0.5" placeholder="2.0">
+            <small class="form-text text-muted">Lascia vuoto per disabilitare. Suggestionato: 2.0 (95%) o 3.0 (99%)</small>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Stati da eliminare (una riga per stato)</label>
+            <textarea class="form-control form-control-sm" id="dp-outlier-states" rows="2" placeholder="unavailable&#10;unknown"></textarea>
+          </div>
+        </div>
 
         <hr class="my-3">
         <div id="dp-preview-result" class="small text-muted mb-3">
@@ -194,6 +237,7 @@ const STRATEGY_DESCS = {
   temporal_decimation: 'Mantieni 1 record/ora dopo N giorni, 1 record/giorno dopo 2N giorni.',
   rolling_average: 'Sostituisce i record con la media del bucket (solo sensori numerici).',
   adaptive_purge: 'Gestione multi-fascia: appiattimento progressivo poi eliminazione completa.',
+  outlier_purge: 'Elimina valori anomali/impossibili: negativi, fuori range accettabile, o outlier statistici.',
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -226,6 +270,9 @@ async function loadDetail() {
 
     // Chart
     renderDensityChart(data.daily_counts || []);
+
+    // Load value range for anomaly detection
+    loadValueRange();
 
   } catch(e) {
     showToast('Errore: ' + e.message, 'danger');
@@ -311,6 +358,7 @@ function updateDetailParams() {
     temporal_decimation: 'dp-temporal',
     rolling_average: 'dp-rolling',
     adaptive_purge: 'dp-adaptive',
+    outlier_purge: 'dp-outlier',
   };
   document.getElementById(map[val])?.classList.remove('d-none');
   document.getElementById('strategy-desc').textContent = STRATEGY_DESCS[val] || '';
@@ -331,6 +379,18 @@ function getDetailParams() {
     params.threshold_2_days = parseInt(document.getElementById('dp-adp-t2').value, 10);
     params.threshold_3_days = parseInt(document.getElementById('dp-adp-t3').value, 10);
     params.threshold_4_days = 36500;
+  } else if (strategy === 'outlier_purge') {
+    params.remove_negative = document.getElementById('dp-outlier-neg').checked;
+    const minVal = document.getElementById('dp-outlier-min').value;
+    const maxVal = document.getElementById('dp-outlier-max').value;
+    if (minVal !== '') params.min_value = parseFloat(minVal);
+    if (maxVal !== '') params.max_value = parseFloat(maxVal);
+    const stdVal = document.getElementById('dp-outlier-std').value;
+    if (stdVal !== '') params.std_dev_multiplier = parseFloat(stdVal);
+    const statesText = document.getElementById('dp-outlier-states').value.trim();
+    if (statesText) {
+      params.state_blacklist = statesText.split('\n').map(s => s.trim()).filter(s => s);
+    }
   }
   return { strategy, params };
 }
@@ -365,6 +425,66 @@ async function detailExecute() {
     loadDetail();
   } catch(e) {
     showToast(`Errore: ${e.message}`, 'danger');
+  }
+}
+
+// Variabile globale per memorizzare il value range
+let currentSensorRange = null;
+
+async function loadValueRange() {
+  try {
+    const data = await apiGet(`/api/sensors/${encodeURIComponent(ENTITY_ID)}/value-range`);
+    currentSensorRange = data;
+    
+    // Aggiorna il testo informativo
+    let rangeInfo = 'Range valori: ';
+    if (data.configured_min !== null && data.configured_max !== null) {
+      rangeInfo += `<strong>Configurato:</strong> ${data.configured_min} - ${data.configured_max}`;
+    }
+    if (data.observed_min !== null && data.observed_max !== null) {
+      if (data.configured_min !== null) rangeInfo += ' | ';
+      rangeInfo += `<strong>Osservato:</strong> ${data.observed_min.toFixed(2)} - ${data.observed_max.toFixed(2)}`;
+    }
+    if (data.unit) rangeInfo += ` <span class="text-muted">${data.unit}</span>`;
+    
+    document.getElementById('outlier-range-info').innerHTML = rangeInfo;
+    
+    // Aggiorna i hint nei campi
+    if (data.observed_min !== null) {
+      document.getElementById('outlier-min-hint').textContent = 
+        `Osservato: ${data.observed_min.toFixed(2)} (media: ${data.recent_avg?.toFixed(2) || '?'})`;
+    }
+    if (data.observed_max !== null) {
+      document.getElementById('outlier-max-hint').textContent = 
+        `Osservato: ${data.observed_max.toFixed(2)} (stddev: ${data.recent_stddev?.toFixed(2) || '?'})`;
+    }
+  } catch(e) {
+    console.error('Errore caricamento value-range:', e);
+    document.getElementById('outlier-range-info').innerHTML = 
+      '<span class="text-danger">Errore caricamento intervalli</span>';
+  }
+}
+
+function fillOutlierFromRange(type) {
+  if (!currentSensorRange) {
+    showToast('Intervalli non ancora caricati', 'warning');
+    return;
+  }
+  
+  if (type === 'min') {
+    const value = currentSensorRange.configured_min ?? currentSensorRange.observed_min;
+    if (value !== null) {
+      document.getElementById('dp-outlier-min').value = value;
+    } else {
+      showToast('Valore minimo non disponibile', 'info');
+    }
+  } else if (type === 'max') {
+    const value = currentSensorRange.configured_max ?? currentSensorRange.observed_max;
+    if (value !== null) {
+      document.getElementById('dp-outlier-max').value = value;
+    } else {
+      showToast('Valore massimo non disponibile', 'info');
+    }
   }
 }
 </script>

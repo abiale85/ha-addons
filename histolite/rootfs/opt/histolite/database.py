@@ -7,6 +7,7 @@ import sqlite3
 import os
 import shutil
 import logging
+import json
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -517,6 +518,101 @@ class HaDatabase:
                     logger.warning(f"get_recent_values {entity_id}: timeout")
                     return []
                 raise
+
+    def get_sensor_value_range(self, entity_id: str) -> dict:
+        """
+        Estrae il range di valori accettabili per un sensore:
+        1. min_value/max_value configurato in HA (da state_attributes)
+        2. min/max osservato nei dati storici
+        3. media e stddev dei valori numerici recenti
+        """
+        result = {
+            "entity_id": entity_id,
+            "configured_min": None,
+            "configured_max": None,
+            "observed_min": None,
+            "observed_max": None,
+            "recent_avg": None,
+            "recent_stddev": None,
+            "unit": None,
+            "device_class": None,
+        }
+        
+        use_meta = self._use_meta_schema()
+        schema = self.get_schema_info()
+        order_col = "last_updated_ts" if schema["uses_ts"] else "last_updated"
+        
+        with self._connect(read_only=True) as conn:
+            conn.execute("PRAGMA busy_timeout=5000")
+            try:
+                # Estrai metadata_id
+                if use_meta:
+                    meta_id = self._get_metadata_id(conn, entity_id)
+                    if meta_id is None:
+                        return result
+                    where_clause = "WHERE s.metadata_id = ?"
+                    where_param = meta_id
+                else:
+                    where_clause = "WHERE s.entity_id = ?"
+                    where_param = entity_id
+                
+                # Estrai attributi dal primo record (contengono le configurazioni)
+                if use_meta:
+                    attr_query = f"""
+                        SELECT sa.attributes FROM state_attributes sa
+                        WHERE sa.attributes_id IN (
+                            SELECT DISTINCT s.attributes_id FROM states s
+                            {where_clause} LIMIT 1
+                        )
+                    """
+                    attr_row = conn.execute(attr_query, (where_param,)).fetchone()
+                else:
+                    attr_query = f"""
+                        SELECT attributes FROM states
+                        {where_clause} LIMIT 1
+                    """
+                    attr_row = conn.execute(attr_query, (where_param,)).fetchone()
+                
+                if attr_row and attr_row[0]:
+                    try:
+                        attrs = json.loads(attr_row[0])
+                        result["configured_min"] = attrs.get("min_value")
+                        result["configured_max"] = attrs.get("max_value")
+                        result["unit"] = attrs.get("unit_of_measurement")
+                        result["device_class"] = attrs.get("device_class")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                
+                # Calcola min/max osservati sui valori numerici
+                stats_query = f"""
+                    SELECT
+                        MIN(CAST(s.state AS REAL)) AS obs_min,
+                        MAX(CAST(s.state AS REAL)) AS obs_max,
+                        AVG(CAST(s.state AS REAL)) AS avg_val,
+                        SQRT(
+                            SUM((CAST(s.state AS REAL) - (SELECT AVG(CAST(s2.state AS REAL)) FROM states s2 {where_clause})) * 
+                                (CAST(s.state AS REAL) - (SELECT AVG(CAST(s2.state AS REAL)) FROM states s2 {where_clause})))
+                            / COUNT(*)
+                        ) AS stddev_val
+                    FROM states s
+                    {where_clause}
+                    AND s.state NOT IN ('unknown','unavailable','')
+                    AND s.state GLOB '[+-]?[0-9]*[.]?[0-9]+'
+                """
+                
+                stats_row = conn.execute(stats_query, (where_param, where_param, where_param)).fetchone()
+                if stats_row:
+                    result["observed_min"] = stats_row["obs_min"]
+                    result["observed_max"] = stats_row["obs_max"]
+                    result["recent_avg"] = stats_row["avg_val"]
+                    result["recent_stddev"] = stats_row["stddev_val"]
+                
+            except sqlite3.OperationalError as e:
+                if "timeout" in str(e).lower():
+                    logger.warning(f"get_sensor_value_range {entity_id}: timeout")
+                raise
+        
+        return result
 
     # ------------------------------------------------------------------
     # Operazioni di purge
