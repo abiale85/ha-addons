@@ -3,7 +3,7 @@ description: >
   Gestione intelligente della storia dei sensori Home Assistant.
   Analizza i sensori con più dati registrati e applica strategie di
   purge mirato o appiattimento statistico per alleggerire il database SQLite.
-version: "1.1.9"
+version: "1.2.0"
 slug: "histolite"
 init: false
 homeassistant_api: false

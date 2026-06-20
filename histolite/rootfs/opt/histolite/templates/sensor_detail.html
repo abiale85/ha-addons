@@ -107,6 +107,7 @@
             <option value="temporal_decimation">Decimazione Temporale</option>
             <option value="rolling_average">Media Mobile</option>
             <option value="adaptive_purge">Purge Adattivo</option>
+            <option value="peak_decimation">Picco per Bucket (Contatori)</option>
             <option value="outlier_purge">Rimozione Anomalie</option>
           </select>
           <div class="form-text" id="strategy-desc"></div>
@@ -164,6 +165,35 @@
                 <span class="input-group-text">gg</span>
               </div>
             </div>
+          </div>
+        </div>
+        <!-- Params peak decimation -->
+        <div id="dp-peak" class="detail-params d-none">
+          <div class="alert alert-info py-2 mb-3">
+            <small><i class="bi bi-info-circle me-1"></i>Ideale per contatori energia, gas, acqua che crescono nel tempo. Mantiene il valore più alto del periodo e preserva i reset.</small>
+          </div>
+          <label class="form-label">Applica a dati più vecchi di</label>
+          <div class="input-group input-group-sm mb-2">
+            <input type="number" class="form-control" id="dp-peak-days" value="7" min="1">
+            <span class="input-group-text">giorni</span>
+          </div>
+          <select class="form-select form-select-sm mb-3" id="dp-peak-gran">
+            <option value="hour">Granularità oraria</option>
+            <option value="day">Granularità giornaliera</option>
+          </select>
+          <div class="form-check form-check mb-2">
+            <input type="checkbox" class="form-check-input" id="dp-peak-resets" checked>
+            <label class="form-check-label" for="dp-peak-resets">
+              Preserva punti di reset automaticamente
+            </label>
+          </div>
+          <div id="dp-peak-reset-options">
+            <label class="form-label small">Soglia reset (% di calo per rilevare un reset)</label>
+            <div class="input-group input-group-sm">
+              <input type="number" class="form-control" id="dp-peak-threshold" value="50" min="5" max="99" step="5">
+              <span class="input-group-text">%</span>
+            </div>
+            <small class="form-text text-muted">Es. 50%: se il valore scende di oltre la metà dal precedente, è un reset.</small>
           </div>
         </div>
         <!-- Params outlier -->
@@ -258,6 +288,7 @@ const STRATEGY_DESCS = {
   temporal_decimation: 'Mantieni 1 record/ora dopo N giorni, 1 record/giorno dopo 2N giorni.',
   rolling_average: 'Sostituisce i record con la media del bucket (solo sensori numerici).',
   adaptive_purge: 'Gestione multi-fascia: appiattimento progressivo poi eliminazione completa.',
+  peak_decimation: 'Per contatori in crescita: mantiene il MASSIMO di ogni bucket. Preserva i punti di reset automaticamente.',
   outlier_purge: 'Elimina valori anomali/impossibili: negativi, fuori range accettabile, o outlier statistici.',
 };
 
@@ -380,6 +411,7 @@ function updateDetailParams() {
     temporal_decimation: 'dp-temporal',
     rolling_average: 'dp-rolling',
     adaptive_purge: 'dp-adaptive',
+    peak_decimation: 'dp-peak',
     outlier_purge: 'dp-outlier',
   };
   document.getElementById(map[val])?.classList.remove('d-none');
@@ -401,6 +433,13 @@ function getDetailParams() {
     params.threshold_2_days = parseInt(document.getElementById('dp-adp-t2').value, 10);
     params.threshold_3_days = parseInt(document.getElementById('dp-adp-t3').value, 10);
     params.threshold_4_days = 36500;
+  } else if (strategy === 'peak_decimation') {
+    params.older_than_days = parseInt(document.getElementById('dp-peak-days').value, 10);
+    params.granularity = document.getElementById('dp-peak-gran').value;
+    params.keep_resets = document.getElementById('dp-peak-resets').checked;
+    if (params.keep_resets) {
+      params.reset_threshold_pct = parseFloat(document.getElementById('dp-peak-threshold').value) || 50;
+    }
   } else if (strategy === 'outlier_purge') {
     params.remove_negative = document.getElementById('dp-outlier-neg').checked;
     const minVal = document.getElementById('dp-outlier-min').value;

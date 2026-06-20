@@ -856,6 +856,184 @@ class HaDatabase:
                 "dry_run": False,
             }
 
+    def peak_decimate_entity(
+        self,
+        entity_id: str,
+        older_than_days: int,
+        granularity: str = "hour",
+        keep_resets: bool = True,
+        reset_threshold_pct: float = 50.0,
+        dry_run: bool = False,
+        batch_size: int = 5000,
+    ) -> dict:
+        """
+        Decima la storia di un sensore a crescita continua (contatori energia, acqua…)
+        mantenendo il VALORE MASSIMO per ogni bucket temporale invece della media.
+
+        - Preserva il picco di ogni periodo → non distorce le letture cumulative
+        - Rileva i reset automaticamente (calo > reset_threshold_pct%) e conserva
+          il punto immediatamente PRIMA e DOPO il reset
+        - I bucket con un solo record vengono lasciati invariati
+        """
+        self._validate_schema_for_write()
+        schema = self.get_schema_info()
+        use_meta = self._use_meta_schema()
+
+        import time as _time
+
+        with self._connect(read_only=dry_run) as conn:
+            if use_meta:
+                meta_id = self._get_metadata_id(conn, entity_id)
+                if meta_id is None:
+                    return {"total_records": 0, "buckets": 0,
+                            "estimated_deleted": 0, "deleted": 0, "dry_run": dry_run}
+                id_filter = "metadata_id = ?"
+                id_param = meta_id
+            else:
+                id_filter = "entity_id = ?"
+                id_param = entity_id
+
+            if schema["uses_ts"]:
+                cutoff = _time.time() - older_than_days * 86400
+                ts_col = "last_updated_ts"
+                bucket_expr = (
+                    "CAST(last_updated_ts / 3600 AS INTEGER) * 3600"
+                    if granularity == "hour"
+                    else "CAST(last_updated_ts / 86400 AS INTEGER) * 86400"
+                )
+                where_clause = f"{id_filter} AND last_updated_ts < ?"
+                base_params: tuple = (id_param, cutoff)
+            else:
+                ts_col = "last_updated"
+                cutoff = None
+                bucket_expr = (
+                    "strftime('%Y-%m-%d %H', last_updated)"
+                    if granularity == "hour"
+                    else "strftime('%Y-%m-%d', last_updated)"
+                )
+                where_clause = (
+                    f"{id_filter} AND datetime(last_updated) < "
+                    f"datetime('now', '-{older_than_days} days')"
+                )
+                base_params = (id_param,)
+
+            # Conteggio totale
+            total_records = conn.execute(
+                f"SELECT COUNT(*) AS c FROM states WHERE {where_clause}", base_params
+            ).fetchone()["c"]
+
+            if total_records == 0:
+                return {"total_records": 0, "buckets": 0,
+                        "estimated_deleted": 0, "deleted": 0, "dry_run": dry_run}
+
+            # ── Fase 1: trova MAX valore per bucket ──────────────────────
+            # Usiamo window function ROW_NUMBER per selezionare il record col valore più alto
+            # Fallback: se il sensore non è numerico, teniamo MIN(state_id) per bucket
+            bucket_query = f"""
+                SELECT state_id, bucket, bucket_count FROM (
+                    SELECT
+                        state_id,
+                        {bucket_expr} AS bucket,
+                        COUNT(*) OVER (PARTITION BY {bucket_expr}) AS bucket_count,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY {bucket_expr}
+                            ORDER BY
+                                CASE WHEN state NOT IN ('unknown','unavailable','')
+                                     THEN CAST(state AS REAL) ELSE -1e18 END DESC,
+                                state_id DESC
+                        ) AS rn
+                    FROM states
+                    WHERE {where_clause}
+                ) t WHERE rn = 1 AND bucket_count > 1
+            """
+            keep_rows = conn.execute(bucket_query, base_params).fetchall()
+            keep_ids: set = {r["state_id"] for r in keep_rows}
+            num_buckets = len(keep_rows)
+
+            # ── Fase 2: reset detection ──────────────────────────────────
+            reset_keep_ids: set = set()
+            if keep_resets and reset_threshold_pct > 0:
+                threshold_ratio = reset_threshold_pct / 100.0
+                order_col = ts_col
+                # Carica tutti i record numerici (solo state_id + valore) — solo il range
+                vals_query = f"""
+                    SELECT state_id, CAST(state AS REAL) AS val
+                    FROM states
+                    WHERE {where_clause}
+                    AND state NOT IN ('unknown','unavailable','')
+                    ORDER BY {order_col} ASC
+                """
+                vals = conn.execute(vals_query, base_params).fetchall()
+                prev_id, prev_val = None, None
+                for row in vals:
+                    curr_id = row["state_id"]
+                    curr_val = row["val"]
+                    if prev_val is not None and prev_val > 0 and curr_val is not None:
+                        drop_ratio = (prev_val - curr_val) / prev_val
+                        if drop_ratio >= threshold_ratio:
+                            # Reset rilevato: mantieni il punto appena prima e appena dopo
+                            reset_keep_ids.add(prev_id)
+                            reset_keep_ids.add(curr_id)
+                    prev_id, prev_val = curr_id, curr_val
+
+            all_keep_ids = keep_ids | reset_keep_ids
+            estimated_deleted = total_records - len(all_keep_ids)
+
+            if dry_run:
+                return {
+                    "total_records": total_records,
+                    "buckets": num_buckets,
+                    "estimated_deleted": max(0, estimated_deleted),
+                    "reset_points": len(reset_keep_ids),
+                    "dry_run": True,
+                }
+
+            # ── Fase 3: elimina in batch tutto tranne all_keep_ids ───────
+            deleted = 0
+            while True:
+                if schema["uses_ts"]:
+                    to_del = conn.execute(
+                        f"SELECT state_id FROM states "
+                        f"WHERE {id_filter} AND last_updated_ts < ? "
+                        f"LIMIT ?",
+                        (id_param, cutoff, batch_size * 2),
+                    ).fetchall()
+                else:
+                    to_del = conn.execute(
+                        f"SELECT state_id FROM states "
+                        f"WHERE {id_filter} "
+                        f"AND datetime(last_updated) < datetime('now', '-{older_than_days} days') "
+                        f"LIMIT ?",
+                        (id_param, batch_size * 2),
+                    ).fetchall()
+
+                batch_ids = [r["state_id"] for r in to_del if r["state_id"] not in all_keep_ids]
+                if not batch_ids:
+                    break
+
+                batch_chunk = batch_ids[:batch_size]
+                ph = ",".join("?" * len(batch_chunk))
+                conn.execute(
+                    f"UPDATE states SET old_state_id = NULL "
+                    f"WHERE old_state_id IN ({ph})", batch_chunk
+                )
+                conn.execute(f"DELETE FROM states WHERE state_id IN ({ph})", batch_chunk)
+                deleted += len(batch_chunk)
+                conn.commit()
+
+                # Se il batch processato era < batch_size abbiamo finito
+                if len(batch_ids) < batch_size:
+                    break
+
+            return {
+                "total_records": total_records,
+                "buckets": num_buckets,
+                "estimated_deleted": estimated_deleted,
+                "deleted": deleted,
+                "reset_points": len(reset_keep_ids),
+                "dry_run": False,
+            }
+
     # ------------------------------------------------------------------
     # Purge statistics_short_term
     # ------------------------------------------------------------------

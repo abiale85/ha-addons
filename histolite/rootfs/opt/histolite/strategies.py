@@ -383,6 +383,88 @@ class OutlierPurge(Strategy):
 
 
 # ---------------------------------------------------------------------------
+# Strategia 6 - Peak Decimation (Massimo per bucket — contatori/crescita)
+# ---------------------------------------------------------------------------
+
+class PeakDecimation(Strategy):
+    """
+    Per sensori a crescita continua (contatori energia, gas, acqua…):
+    mantiene il VALORE MASSIMO di ogni bucket temporale anziché la media.
+
+    Vantaggi rispetto alla media mobile:
+    - Non distorce le letture cumulative (la media di un contatore non ha senso)
+    - Preserva il picco raggiunto nel periodo
+    - Gestisce automaticamente i reset periodici del contatore
+    """
+    name = "peak_decimation"
+    label = "Picco per Bucket (Contatori)"
+    description = (
+        "Per sensori in crescita continua (energia, gas, acqua…): "
+        "mantiene il valore MASSIMO per ogni bucket orario/giornaliero. "
+        "Rileva e preserva automaticamente i punti di reset."
+    )
+
+    def execute(self, db, entity_ids, params, dry_run=False,
+                backup_path=None, backup_before=False, batch_size=5000):
+        older_than_days = int(params.get("older_than_days", 7))
+        granularity = params.get("granularity", "hour")
+        keep_resets = bool(params.get("keep_resets", True))
+        reset_threshold_pct = float(params.get("reset_threshold_pct", 50.0))
+
+        backup_dest = None
+        if not dry_run:
+            backup_dest = self._maybe_backup(db, backup_path, backup_before)
+
+        results = []
+        for eid in entity_ids:
+            try:
+                stats = db.get_sensor_stats(eid)
+                if stats and not stats.get("is_numeric", False):
+                    results.append({
+                        "entity_id": eid,
+                        "skipped": True,
+                        "reason": "Sensore non numerico - strategia inapplicabile",
+                    })
+                    continue
+
+                r = db.peak_decimate_entity(
+                    eid, older_than_days,
+                    granularity=granularity,
+                    keep_resets=keep_resets,
+                    reset_threshold_pct=reset_threshold_pct,
+                    dry_run=dry_run,
+                    batch_size=batch_size,
+                )
+                r["entity_id"] = eid
+                results.append(r)
+                reset_info = f", {r.get('reset_points', 0)} reset preservati" if keep_resets else ""
+                logger.info(
+                    f"[PeakDecimation] {eid}: "
+                    f"{'(DRY) ' if dry_run else ''}"
+                    f"~{r.get('deleted', r.get('estimated_deleted', 0))} eliminati"
+                    f"{reset_info}"
+                )
+            except Exception as e:
+                logger.error(f"[PeakDecimation] Errore su {eid}: {e}")
+                results.append({"entity_id": eid, "error": str(e)})
+
+        total_deleted = sum(
+            r.get("deleted", r.get("estimated_deleted", 0))
+            for r in results
+            if not r.get("skipped")
+        )
+        return {
+            "strategy": self.name,
+            "dry_run": dry_run,
+            "params": params,
+            "entity_count": len(entity_ids),
+            "total_deleted": total_deleted,
+            "backup": backup_dest,
+            "details": results,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Registry e factory
 # ---------------------------------------------------------------------------
 
@@ -392,6 +474,7 @@ STRATEGY_REGISTRY = {
     RollingAverage.name: RollingAverage,
     AdaptivePurge.name: AdaptivePurge,
     OutlierPurge.name: OutlierPurge,
+    PeakDecimation.name: PeakDecimation,
 }
 
 STRATEGY_LIST = [
@@ -452,6 +535,21 @@ STRATEGY_LIST = [
              "type": "number", "default": None, "min": 0.5, "optional": True},
             {"key": "state_blacklist", "label": "Stati da eliminare (es. unavailable, unknown)",
              "type": "list", "default": [], "optional": True},
+        ],
+    },
+    {
+        "name": PeakDecimation.name,
+        "label": PeakDecimation.label,
+        "description": PeakDecimation.description,
+        "params": [
+            {"key": "older_than_days", "label": "Applica a dati più vecchi di (giorni)",
+             "type": "number", "default": 7, "min": 1},
+            {"key": "granularity", "label": "Granularità bucket",
+             "type": "select", "options": ["hour", "day"], "default": "hour"},
+            {"key": "keep_resets", "label": "Preserva punti di reset automaticamente",
+             "type": "boolean", "default": True},
+            {"key": "reset_threshold_pct", "label": "Soglia reset (% calo per rilevare reset)",
+             "type": "number", "default": 50.0, "min": 5, "max": 99},
         ],
     },
 ]
