@@ -85,9 +85,94 @@ def _overview_scheduler():
         time.sleep(300)
         _run_overview_bg()
 
-# Calcolo iniziale al boot + scheduler periodico
+# Calcolo iniziale al boot + scheduler periodico overview
 threading.Thread(target=_run_overview_bg, name="overview-boot", daemon=True).start()
 threading.Thread(target=_overview_scheduler, name="overview-scheduler", daemon=True).start()
+
+# ---------------------------------------------------------------------------
+# Strategy scheduler - esecuzione pianificata serializzata
+# ---------------------------------------------------------------------------
+
+# Lock globale per tutte le esecuzioni di strategie (manuali + pianificate).
+# Garantisce che mai due strategie girino contemporaneamente sul DB.
+_strategy_lock = threading.Lock()
+
+def _run_strategy_safe(saved: dict) -> dict:
+    """Esegue una strategia acquisendo il lock globale.
+    Tra batch successivi il thread cede il controllo (inter_batch_sleep)."""
+    name = saved.get("name", saved["id"])
+    logger.info(f"[Scheduler] Avvio strategia '{name}'")
+    start = time.time()
+    result = execute_strategy(
+        db=db,
+        strategy_name=saved["strategy_type"],
+        entity_ids=saved.get("entity_ids", []),
+        params=saved.get("params", {}),
+        dry_run=False,
+        backup_path=BACKUP_PATH,
+        backup_before=BACKUP_BEFORE_PURGE,
+        batch_size=MAX_ROWS_PER_BATCH,
+    )
+    result["duration_sec"] = round(time.time() - start, 2)
+    now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    config_manager.save_job(
+        result, saved["strategy_type"],
+        saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
+    )
+    config_manager.update_strategy_last_run(saved["id"], now_iso)
+    logger.info(f"[Scheduler] Completata '{name}' in {result['duration_sec']}s")
+    return result
+
+def _check_and_run_scheduled_strategies():
+    """Controlla e avvia le strategie pianificate per questo minuto."""
+    now = datetime.now()
+    strategies = config_manager.list_strategies()
+    due = []
+    for s in strategies:
+        sched = s.get("schedule_time")  # "HH:MM" o None
+        if not sched:
+            continue
+        try:
+            h, m = map(int, sched.split(":"))
+        except Exception:
+            continue
+        if now.hour != h or now.minute != m:
+            continue
+        last = s.get("last_run_at", "")
+        today = now.strftime("%Y-%m-%d")
+        if last.startswith(today):
+            continue  # gia eseguita oggi
+        due.append(s)
+
+    if not due:
+        return
+
+    # Acquisisci il lock: se qualcosa sta gia girando, aspetta max 5s poi salta
+    if not _strategy_lock.acquire(timeout=5):
+        logger.warning(f"[Scheduler] Lock occupato, salto {len(due)} strategie pianificate")
+        return
+    try:
+        for s in due:
+            try:
+                _run_strategy_safe(s)
+                # Pausa tra strategie consecutive per far respirare il DB
+                if due.index(s) < len(due) - 1:
+                    time.sleep(30)
+            except Exception as e:
+                logger.error(f"[Scheduler] Errore strategia '{s.get('name')}': {e}")
+    finally:
+        _strategy_lock.release()
+
+def _strategy_scheduler():
+    """Thread daemon: ogni minuto controlla strategie pianificate."""
+    while True:
+        time.sleep(60)
+        try:
+            _check_and_run_scheduled_strategies()
+        except Exception as e:
+            logger.error(f"[Scheduler] Errore ciclo scheduler: {e}")
+
+threading.Thread(target=_strategy_scheduler, name="strategy-scheduler", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -469,31 +554,20 @@ def api_execute():
 
 @app.route("/api/execute-saved/<strategy_id>", methods=["POST"])
 def api_execute_saved(strategy_id):
-    """Esegue una strategia salvata (per nome ID)."""
+    """Esegue una strategia salvata. Serializzata con il lock globale."""
     saved = config_manager.get_strategy(strategy_id)
     if not saved:
         return jsonify({"error": "Strategia non trovata"}), 404
+    if not _strategy_lock.acquire(timeout=5):
+        return jsonify({"error": "Un'altra operazione e' gia' in esecuzione. Riprovare tra qualche istante.", "busy": True}), 409
     try:
-        start = time.time()
-        result = execute_strategy(
-            db=db,
-            strategy_name=saved["strategy_type"],
-            entity_ids=saved.get("entity_ids", []),
-            params=saved.get("params", {}),
-            dry_run=False,
-            backup_path=BACKUP_PATH,
-            backup_before=BACKUP_BEFORE_PURGE,
-            batch_size=MAX_ROWS_PER_BATCH,
-        )
-        result["duration_sec"] = round(time.time() - start, 2)
-        config_manager.save_job(
-            result, saved["strategy_type"],
-            saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
-        )
+        result = _run_strategy_safe(saved)
         return jsonify(result)
     except Exception as e:
         logger.error(f"Errore execute-saved {strategy_id}: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        _strategy_lock.release()
 
 
 # ---------------------------------------------------------------------------

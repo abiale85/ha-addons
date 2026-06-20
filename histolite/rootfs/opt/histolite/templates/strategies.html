@@ -50,12 +50,12 @@
       <div class="card-body">
         <input type="hidden" id="edit-id">
         <div class="row g-3">
-          <div class="col-md-6">
+          <div class="col-md-5">
             <label class="form-label">Nome strategia</label>
             <input type="text" class="form-control" id="f-name"
                    placeholder="Es. Purge sensori elettrici">
           </div>
-          <div class="col-md-6">
+          <div class="col-md-4">
             <label class="form-label">Tipo</label>
             <select class="form-select" id="f-type" onchange="updateFormParams()">
               {% for s in strategy_types %}
@@ -192,6 +192,16 @@
             </div>
         </div>
 
+          <div class="col-md-3">
+            <label class="form-label">Esecuzione pianificata
+              <i class="bi bi-info-circle text-muted ms-1" title="Lascia vuoto per esecuzione solo manuale"></i>
+            </label>
+            <input type="time" class="form-control" id="f-schedule-time"
+                   title="Ora giornaliera di esecuzione automatica (vuoto = solo manuale)">
+            <div class="form-text">Lascia vuoto per solo manuale</div>
+          </div>
+        </div>
+
         <div class="d-flex gap-2 mt-3">
           <button class="btn btn-primary" onclick="saveStrategy()">
             <i class="bi bi-save me-1"></i>Salva strategia
@@ -223,6 +233,11 @@
               <div class="d-flex align-items-center gap-2 mb-1">
                 <strong>{{ s.name }}</strong>
                 <span class="badge bg-info text-dark small">{{ s.strategy_type }}</span>
+                {% if s.schedule_time %}
+                <span class="badge bg-primary small">
+                  <i class="bi bi-clock me-1"></i>{{ s.schedule_time }} giornaliero
+                </span>
+                {% endif %}
               </div>
               <div class="text-muted small">
                 {% if s.entity_ids %}
@@ -231,6 +246,9 @@
                   <span class="text-warning">Nessuna entità</span>
                 {% endif %}
                 · Creata: {{ s.created_at }}
+                {% if s.last_run_at %}
+                · <span class="text-success">Ultima esecuzione: {{ s.last_run_at[:16]|replace('T',' ') }}</span>
+                {% endif %}
               </div>
             </div>
             <div class="d-flex gap-1 ms-2">
@@ -386,12 +404,14 @@ function getFormParams() {
 async function saveStrategy() {
   const name = document.getElementById('f-name').value.trim();
   if (!name) { showToast('Inserisci un nome per la strategia', 'warning'); return; }
+  const scheduleTime = document.getElementById('f-schedule-time').value.trim();
   const payload = {
     id: document.getElementById('edit-id').value || '',
     name,
     strategy_type: document.getElementById('f-type').value,
     entity_ids: [...selectedEntities],
     params: getFormParams(),
+    schedule_time: scheduleTime || null,
   };
   try {
     const result = await apiPost('/api/strategies', payload);
@@ -406,6 +426,7 @@ async function saveStrategy() {
 function resetForm() {
   document.getElementById('edit-id').value = '';
   document.getElementById('f-name').value = '';
+  document.getElementById('f-schedule-time').value = '';
   selectedEntities = [];
   renderEntityTags();
   document.getElementById('form-title').textContent = 'Nuova strategia';
@@ -440,6 +461,7 @@ function editSaved(s) {
     document.getElementById('fp-outlier-min').value = p.min_value ?? '';
     document.getElementById('fp-outlier-max').value = p.max_value ?? '';
   }
+  document.getElementById('f-schedule-time').value = s.schedule_time || '';
   document.getElementById('form-title').textContent = 'Modifica strategia';
   document.getElementById('strategy-form-card').scrollIntoView({ behavior: 'smooth' });
 }
@@ -460,9 +482,13 @@ async function executeSaved(id) {
   showToast('Esecuzione in corso…', 'info');
   try {
     const result = await apiPost(`/api/execute-saved/${id}`, {});
+    if (result.busy) {
+      showToast('Un’altra operazione è già in corso. Riprovare tra qualche istante.', 'warning');
+      return;
+    }
     showToast(
       result.error ? `Errore: ${result.error}` :
-      `Completato! ${fmt(result.total_deleted)} record in ${result.duration_sec}s`,
+      `Completato! ${fmt(result.total_deleted)} record eliminati in ${result.duration_sec}s`,
       result.error ? 'danger' : 'success'
     );
   } catch(e) {

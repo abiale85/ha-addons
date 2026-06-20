@@ -79,6 +79,15 @@ class ConfigManager:
         self._save(self.strategies_file, new_list)
         return True
 
+    def update_strategy_last_run(self, strategy_id: str, timestamp: str):
+        """Aggiorna il timestamp dell'ultima esecuzione."""
+        strategies = self.list_strategies()
+        for i, s in enumerate(strategies):
+            if s["id"] == strategy_id:
+                strategies[i]["last_run_at"] = timestamp
+                self._save(self.strategies_file, strategies)
+                return
+
     # ------------------------------------------------------------------
     # Log operazioni (job history)
     # ------------------------------------------------------------------
