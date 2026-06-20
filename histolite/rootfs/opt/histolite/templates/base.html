@@ -75,6 +75,7 @@
 <script>
   // Legge BASE_PATH dal tag <base> - funziona sempre indipendentemente da Ingress
   const BASE_PATH = document.querySelector('base').getAttribute('href').replace(/\/$/, '');
+  console.log('[HistoLite] BASE_PATH:', BASE_PATH || '(vuoto - nessun Ingress prefix)');
 </script>
 <script src="static/js/app.js"></script>
 {% block scripts %}{% endblock %}

@@ -151,7 +151,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadDashboard() {
   try {
+    // Mostra spinner durante il caricamento (query puo' essere lenta su DB grande)
+    ['kpi-states','kpi-size','kpi-sensors','kpi-top10'].forEach(id => {
+      document.getElementById(id).innerHTML =
+        '<span class="spinner-border spinner-border-sm" role="status"></span>';
+    });
+    console.log('[HistoLite] Caricamento overview da:', BASE_PATH + '/api/overview');
     const data = await apiGet('/api/overview');
+    console.log('[HistoLite] Risposta overview:', data);
     if (data.error) { showToast(data.error, 'danger'); return; }
 
     // KPI
@@ -172,6 +179,13 @@ async function loadDashboard() {
     renderTop10Table(top);
 
   } catch(e) {
+    console.error('[HistoLite] Errore loadDashboard:', e);
+    const errMsg = `<span class="text-danger small">⚠ ${e.message}</span>`;
+    ['kpi-states','kpi-size','kpi-sensors','kpi-top10'].forEach(id => {
+      document.getElementById(id).innerHTML = errMsg;
+    });
+    document.getElementById('top10-body').innerHTML =
+      `<tr><td colspan="6" class="text-center text-danger py-3">Errore: ${e.message}</td></tr>`;
     showToast('Errore caricamento dashboard: ' + e.message, 'danger');
   }
 }
