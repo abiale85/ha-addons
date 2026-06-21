@@ -26,8 +26,8 @@
                  data-bs-parent="#strategyAccordion">
               <div class="accordion-body pt-0">
                 <p class="text-muted small">{{ s.description }}</p>
-                <button class="btn btn-sm btn-outline-primary"
-                        onclick="prefillForm('{{ s.name }}')">
+                <button class="btn btn-sm btn-outline-primary js-prefill-strategy"
+                  data-strategy-name="{{ s.name }}">
                   <i class="bi bi-plus me-1"></i>Crea strategia
                 </button>
               </div>
@@ -57,7 +57,7 @@
           </div>
           <div class="col-md-4">
             <label class="form-label">Tipo</label>
-            <select class="form-select" id="f-type" onchange="updateFormParams()">
+            <select class="form-select" id="f-type">
               {% for s in strategy_types %}
               <option value="{{ s.name }}">{{ s.label }}</option>
               {% endfor %}
@@ -68,7 +68,7 @@
             <div class="input-group">
               <input type="text" class="form-control" id="f-entity-input"
                      placeholder="Inizia a digitare per cercare…">
-              <button class="btn btn-outline-secondary" type="button" onclick="addEntityFromInput()">
+              <button class="btn btn-outline-secondary" type="button" id="add-entity-btn">
                 <i class="bi bi-plus"></i>
               </button>
             </div>
@@ -203,10 +203,10 @@
         </div>
 
         <div class="d-flex gap-2 mt-3">
-          <button class="btn btn-primary" id="save-strategy-btn" onclick="saveStrategy()">
+          <button class="btn btn-primary" id="save-strategy-btn">
             <i class="bi bi-save me-1"></i>Salva strategia
           </button>
-          <button class="btn btn-outline-secondary" onclick="resetForm()">
+          <button class="btn btn-outline-secondary" id="reset-strategy-btn">
             <i class="bi bi-x me-1"></i>Annulla
           </button>
         </div>
@@ -218,7 +218,7 @@
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-bookmark-check me-2"></i>Strategie salvate
         <span class="badge bg-secondary ms-2">{{ saved_strategies|length }}</span></span>
-        <button class="btn btn-xs btn-outline-danger d-none" id="bulk-delete-btn" onclick="bulkDelete()">
+        <button class="btn btn-xs btn-outline-danger d-none" id="bulk-delete-btn">
           <i class="bi bi-trash me-1"></i>Elimina selezionate (<span id="bulk-count">0</span>)
         </button>
       </div>
@@ -233,8 +233,7 @@
         <div class="strategy-item p-3 border-bottom border-secondary" id="strat-{{ s.id }}">
           <div class="d-flex justify-content-between align-items-start">
             <div class="d-flex align-items-start gap-2 flex-grow-1">
-              <input type="checkbox" class="form-check-input mt-1 strat-check" value="{{ s.id }}"
-                     onchange="updateBulkDelete()">
+              <input type="checkbox" class="form-check-input mt-1 strat-check" value="{{ s.id }}">
               <div class="flex-grow-1">
               <div class="d-flex align-items-center gap-2 mb-1">
                 <strong>{{ s.name }}</strong>
@@ -259,16 +258,16 @@
             </div>
             </div>
             <div class="d-flex gap-1 ms-2">
-              <button class="btn btn-xs btn-outline-success"
-                      onclick="executeSaved('{{ s.id }}')" title="Esegui">
+                    <button class="btn btn-xs btn-outline-success js-execute-saved"
+                      data-strategy-id="{{ s.id }}" title="Esegui">
                 <i class="bi bi-play-fill"></i>
               </button>
-              <button class="btn btn-xs btn-outline-warning"
-                      onclick="editSavedById('{{ s.id }}')" title="Modifica">
+                    <button class="btn btn-xs btn-outline-warning js-edit-saved"
+                      data-strategy-id="{{ s.id }}" title="Modifica">
                 <i class="bi bi-pencil"></i>
               </button>
-              <button class="btn btn-xs btn-outline-danger"
-                      onclick="deleteSaved('{{ s.id }}')" title="Elimina">
+                    <button class="btn btn-xs btn-outline-danger js-delete-saved"
+                      data-strategy-id="{{ s.id }}" title="Elimina">
                 <i class="bi bi-trash"></i>
               </button>
             </div>
@@ -328,10 +327,13 @@ window.addEventListener('beforeunload', () => pageController.abort());
 // Polling dello stato di esecuzione
 let _executionPollInterval = null;
 let _executionInProgress = false;
+let _executionStatusRequestInFlight = false;
 
 async function _pollExecutionStatus() {
+  if (_executionStatusRequestInFlight) return;
+  _executionStatusRequestInFlight = true;
   try {
-    const status = await apiFetch('/api/strategy-status');
+    const status = await apiFetch('/api/strategy-status', { timeout: 5000 });
     const overlay = document.getElementById('execution-overlay');
     const elapsedEl = document.getElementById('exec-elapsed-time');
     const cancelBtn = document.getElementById('exec-cancel-btn');
@@ -360,11 +362,43 @@ async function _pollExecutionStatus() {
       }
     }
   } catch(e) {
-    console.error('[HistoLite] Errore polling status:', e);
+    if (e.name !== 'AbortError' && e.name !== 'TimeoutError') {
+      console.error('[HistoLite] Errore polling status:', e);
+    }
+  } finally {
+    _executionStatusRequestInFlight = false;
   }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const savedList = document.getElementById('saved-strategies-list');
+  document.querySelectorAll('.js-prefill-strategy').forEach(btn => {
+    btn.addEventListener('click', () => prefillForm(btn.dataset.strategyName));
+  });
+  document.getElementById('f-type')?.addEventListener('change', updateFormParams);
+  document.getElementById('add-entity-btn')?.addEventListener('click', addEntityFromInput);
+  document.getElementById('save-strategy-btn')?.addEventListener('click', saveStrategy);
+  document.getElementById('reset-strategy-btn')?.addEventListener('click', resetForm);
+  document.getElementById('bulk-delete-btn')?.addEventListener('click', bulkDelete);
+  savedList?.addEventListener('change', e => {
+    if (e.target.matches('.strat-check')) updateBulkDelete();
+  });
+  savedList?.addEventListener('click', e => {
+    const executeBtn = e.target.closest('.js-execute-saved');
+    if (executeBtn) {
+      executeSaved(executeBtn.dataset.strategyId);
+      return;
+    }
+    const editBtn = e.target.closest('.js-edit-saved');
+    if (editBtn) {
+      editSavedById(editBtn.dataset.strategyId);
+      return;
+    }
+    const deleteBtn = e.target.closest('.js-delete-saved');
+    if (deleteBtn) {
+      deleteSaved(deleteBtn.dataset.strategyId);
+    }
+  });
   updateFormParams();
   setupEntitySearch();
   void _pollExecutionStatus();
@@ -409,8 +443,8 @@ function setupEntitySearch() {
       const matches = (results || []).filter(s => !selectedEntities.includes(s.entity_id)).slice(0, 8);
       if (!matches.length) { suggestions.classList.add('d-none'); return; }
       suggestions.innerHTML = matches.map(s =>
-        `<button type="button" class="list-group-item list-group-item-action list-group-item-dark py-1 small"
-                 onclick="addEntity('${s.entity_id}')">
+        `<button type="button" class="list-group-item list-group-item-action list-group-item-dark py-1 small js-entity-suggestion"
+                 data-entity-id="${s.entity_id}">
            <code>${s.entity_id}</code>
          </button>`
       ).join('');
@@ -424,6 +458,11 @@ function setupEntitySearch() {
   });
 
   document.addEventListener('click', e => {
+    const suggestionBtn = e.target.closest('.js-entity-suggestion');
+    if (suggestionBtn) {
+      addEntity(suggestionBtn.dataset.entityId);
+      return;
+    }
     if (!e.target.closest('#entity-suggestions') && !e.target.closest('#f-entity-input')) {
       suggestions.classList.add('d-none');
     }
@@ -454,7 +493,7 @@ function renderEntityTags() {
     <span class="badge bg-secondary d-flex align-items-center gap-1">
       <code class="text-white">${eid}</code>
       <button type="button" class="btn-close btn-close-white" style="font-size:0.6rem"
-              onclick="removeEntity('${eid}')"></button>
+              data-remove-entity-id="${eid}"></button>
     </span>
   `).join('');
 }
@@ -638,19 +677,6 @@ async function executeSaved(id) {
   }
 }
 
-window.prefillForm = prefillForm;
-window.updateFormParams = updateFormParams;
-window.addEntityFromInput = addEntityFromInput;
-window.addEntity = addEntity;
-window.removeEntity = removeEntity;
-window.saveStrategy = saveStrategy;
-window.resetForm = resetForm;
-window.editSavedById = editSavedById;
-window.deleteSaved = deleteSaved;
-window.updateBulkDelete = updateBulkDelete;
-window.bulkDelete = bulkDelete;
-window.executeSaved = executeSaved;
-
 // Event listener per il bottone "Interrompi"
 document.getElementById('exec-cancel-btn')?.addEventListener('click', async () => {
   try {
@@ -658,6 +684,13 @@ document.getElementById('exec-cancel-btn')?.addEventListener('click', async () =
     showToast('Interruzione richiesta…', 'warning');
   } catch(e) {
     showToast('Errore interruzione: ' + e.message, 'danger');
+  }
+});
+
+document.getElementById('entity-tags')?.addEventListener('click', e => {
+  const removeBtn = e.target.closest('[data-remove-entity-id]');
+  if (removeBtn) {
+    removeEntity(removeBtn.dataset.removeEntityId);
   }
 });
 </script>
