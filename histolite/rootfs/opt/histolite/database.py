@@ -5,7 +5,6 @@ Connessione, analisi e operazioni su home-assistant_v2.db (SQLite)
 
 import sqlite3
 import os
-import shutil
 import logging
 import json
 from datetime import datetime, timezone
@@ -304,16 +303,11 @@ class HaDatabase:
         search_pattern = f"%{search}%" if search else ""
 
         if self._use_meta_schema():
-            # Nuovo schema HA: entity_id in states_meta
-            where_clause = "WHERE sm.entity_id LIKE ?" if search else ""
-            query = f"""
-                SELECT DISTINCT sm.entity_id
-                FROM states_meta sm
-                INNER JOIN states s ON s.metadata_id = sm.metadata_id
-                {where_clause}
-                ORDER BY sm.entity_id
-                LIMIT 1000
-            """
+            # Nuovo schema HA: entity_id in states_meta — query diretta, senza JOIN
+            if search:
+                query = "SELECT entity_id FROM states_meta WHERE entity_id LIKE ? ORDER BY entity_id LIMIT 1000"
+            else:
+                query = "SELECT entity_id FROM states_meta ORDER BY entity_id LIMIT 1000"
         else:
             where_clause = "WHERE entity_id LIKE ?" if search else ""
             query = f"""
@@ -652,15 +646,6 @@ class HaDatabase:
     # ------------------------------------------------------------------
     # Operazioni di purge
     # ------------------------------------------------------------------
-
-    def backup_db(self, backup_path: str) -> str:
-        """Crea un backup del database."""
-        os.makedirs(backup_path, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = os.path.join(backup_path, f"home-assistant_v2_backup_{ts}.db")
-        shutil.copy2(self.db_path, dest)
-        logger.info(f"Backup creato: {dest}")
-        return dest
 
     def purge_entity(
         self,

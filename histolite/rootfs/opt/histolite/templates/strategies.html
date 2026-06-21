@@ -427,6 +427,10 @@ async function saveStrategy() {
   try {
     const name = document.getElementById('f-name').value.trim();
     if (!name) { showToast('Inserisci un nome per la strategia', 'warning'); return; }
+    // Auto-aggiungi eventuale testo nel campo input se non già nei tag
+    const inputVal = document.getElementById('f-entity-input').value.trim();
+    if (inputVal) addEntity(inputVal);
+    if (!selectedEntities.length) { showToast('Aggiungi almeno un\'entità', 'warning'); return; }
     const scheduleTime = document.getElementById('f-schedule-time').value.trim();
     const payload = {
       id: document.getElementById('edit-id').value || '',

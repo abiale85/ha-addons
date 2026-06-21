@@ -26,20 +26,9 @@ class Strategy(ABC):
         entity_ids: list[str],
         params: dict,
         dry_run: bool = False,
-        backup_path: str = None,
-        backup_before: bool = False,
         batch_size: int = 5000,
     ) -> dict:
         ...
-
-    def _maybe_backup(self, db, backup_path, backup_before):
-        if backup_before and backup_path:
-            try:
-                dest = db.backup_db(backup_path)
-                return dest
-            except Exception as e:
-                logger.warning(f"Backup fallito: {e}")
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -55,13 +44,8 @@ class SimplePurge(Strategy):
     label = "Purge Semplice"
     description = "Elimina tutti i record più vecchi di N giorni."
 
-    def execute(self, db, entity_ids, params, dry_run=False,
-                backup_path=None, backup_before=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
         older_than_days = int(params.get("older_than_days", 30))
-        backup_dest = None
-        if not dry_run:
-            backup_dest = self._maybe_backup(db, backup_path, backup_before)
-
         results = []
         for eid in entity_ids:
             try:
@@ -81,7 +65,6 @@ class SimplePurge(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total_deleted,
-            "backup": backup_dest,
             "details": results,
         }
 
@@ -102,13 +85,8 @@ class TemporalDecimation(Strategy):
         "Mantiene 1 record/ora per dati > N giorni e 1 record/giorno per dati > 2N giorni."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False,
-                backup_path=None, backup_before=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
         older_than_days = int(params.get("older_than_days", 14))
-        backup_dest = None
-        if not dry_run:
-            backup_dest = self._maybe_backup(db, backup_path, backup_before)
-
         results = []
         for eid in entity_ids:
             try:
@@ -143,7 +121,6 @@ class TemporalDecimation(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total_deleted,
-            "backup": backup_dest,
             "details": results,
         }
 
@@ -165,14 +142,9 @@ class RollingAverage(Strategy):
         "per i dati più vecchi di N giorni."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False,
-                backup_path=None, backup_before=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
         older_than_days = int(params.get("older_than_days", 7))
         granularity = params.get("granularity", "hour")  # "hour" o "day"
-        backup_dest = None
-        if not dry_run:
-            backup_dest = self._maybe_backup(db, backup_path, backup_before)
-
         results = []
         for eid in entity_ids:
             try:
@@ -209,7 +181,6 @@ class RollingAverage(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total_deleted,
-            "backup": backup_dest,
             "details": results,
         }
 
@@ -234,16 +205,11 @@ class AdaptivePurge(Strategy):
         "appiattisci progressivamente, elimina completamente > soglia_3 giorni."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False,
-                backup_path=None, backup_before=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
         threshold_1 = int(params.get("threshold_1_days", 7))    # tutto
         threshold_2 = int(params.get("threshold_2_days", 30))   # orario
         threshold_3 = int(params.get("threshold_3_days", 90))   # giornaliero
         threshold_4 = int(params.get("threshold_4_days", 365))  # eliminazione
-        backup_dest = None
-        if not dry_run:
-            backup_dest = self._maybe_backup(db, backup_path, backup_before)
-
         results = []
         for eid in entity_ids:
             entity_result = {"entity_id": eid, "phases": []}
@@ -292,7 +258,6 @@ class AdaptivePurge(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total,
-            "backup": backup_dest,
             "details": results,
         }
 
@@ -317,8 +282,7 @@ class OutlierPurge(Strategy):
         "o fuori N deviazioni standard dalla media storica."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False,
-                backup_path=None, backup_before=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
         remove_negative = params.get("remove_negative", False)
         min_value = params.get("min_value")
         max_value = params.get("max_value")
@@ -333,10 +297,6 @@ class OutlierPurge(Strategy):
                 "error": "Nessun criterio di anomalia specificato",
                 "details": [],
             }
-
-        backup_dest = None
-        if not dry_run:
-            backup_dest = self._maybe_backup(db, backup_path, backup_before)
 
         results = []
         for eid in entity_ids:
@@ -377,7 +337,6 @@ class OutlierPurge(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total_deleted,
-            "backup": backup_dest,
             "details": results,
         }
 
@@ -404,17 +363,11 @@ class PeakDecimation(Strategy):
         "Rileva e preserva automaticamente i punti di reset."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False,
-                backup_path=None, backup_before=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
         older_than_days = int(params.get("older_than_days", 7))
         granularity = params.get("granularity", "hour")
         keep_resets = bool(params.get("keep_resets", True))
         reset_threshold_pct = float(params.get("reset_threshold_pct", 50.0))
-
-        backup_dest = None
-        if not dry_run:
-            backup_dest = self._maybe_backup(db, backup_path, backup_before)
-
         results = []
         for eid in entity_ids:
             try:
@@ -459,7 +412,6 @@ class PeakDecimation(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total_deleted,
-            "backup": backup_dest,
             "details": results,
         }
 
@@ -561,8 +513,6 @@ def execute_strategy(
     entity_ids: list[str],
     params: dict,
     dry_run: bool = False,
-    backup_path: str = None,
-    backup_before: bool = False,
     batch_size: int = 5000,
 ) -> dict:
     """Esegue una strategia per nome."""
@@ -571,6 +521,5 @@ def execute_strategy(
         return {"error": f"Strategia sconosciuta: {strategy_name}"}
     return cls().execute(
         db, entity_ids, params, dry_run=dry_run,
-        backup_path=backup_path, backup_before=backup_before,
         batch_size=batch_size,
     )

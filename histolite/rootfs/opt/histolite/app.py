@@ -31,7 +31,6 @@ logger = logging.getLogger("histolite")
 DB_PATH = os.environ.get("DB_PATH", "/config/home-assistant_v2.db")
 DATA_PATH = os.environ.get("DATA_PATH", "/data")
 BACKUP_PATH = os.environ.get("BACKUP_PATH", "/backup")
-BACKUP_BEFORE_PURGE = os.environ.get("BACKUP_BEFORE_PURGE", "false").lower() == "true"
 MAX_ROWS_PER_BATCH = int(os.environ.get("MAX_ROWS_PER_BATCH", "5000"))
 # INGRESS_PATH: HA Supervisor passa il prefisso come env var.
 # Ingress fa da reverse proxy e STRIPPA il prefisso prima di inviare la
@@ -110,8 +109,6 @@ def _run_strategy_safe(saved: dict) -> dict:
         entity_ids=saved.get("entity_ids", []),
         params=saved.get("params", {}),
         dry_run=False,
-        backup_path=BACKUP_PATH,
-        backup_before=BACKUP_BEFORE_PURGE,
         batch_size=MAX_ROWS_PER_BATCH,
     )
     result["duration_sec"] = round(time.time() - start, 2)
@@ -566,8 +563,6 @@ def api_execute():
             entity_ids=entity_ids,
             params=params,
             dry_run=False,
-            backup_path=BACKUP_PATH,
-            backup_before=BACKUP_BEFORE_PURGE,
             batch_size=MAX_ROWS_PER_BATCH,
         )
         result["duration_sec"] = round(time.time() - start, 2)
