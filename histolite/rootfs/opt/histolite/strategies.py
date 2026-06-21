@@ -540,7 +540,20 @@ def execute_strategy(
     cls = STRATEGY_REGISTRY.get(strategy_name)
     if not cls:
         return {"error": f"Strategia sconosciuta: {strategy_name}"}
-    return cls().execute(
-        db, entity_ids, params, dry_run=dry_run,
-        batch_size=batch_size, cancel_event=cancel_event,
-    )
+    strategy = cls()
+    logger.info(f"[StrategyStart] name={strategy_name} entities={len(entity_ids)} dry_run={dry_run}")
+    t0 = time.time()
+    try:
+        res = strategy.execute(
+            db, entity_ids, params, dry_run=dry_run,
+            batch_size=batch_size, cancel_event=cancel_event,
+        )
+        elapsed = time.time() - t0
+        # try to extract basic summary info
+        total_deleted = res.get("total_deleted") if isinstance(res, dict) else None
+        logger.info(f"[StrategyEnd] name={strategy_name} elapsed_s={elapsed:.2f} total_deleted={total_deleted}")
+        return res
+    except Exception as e:
+        elapsed = time.time() - t0
+        logger.error(f"[StrategyError] name={strategy_name} elapsed_s={elapsed:.2f} error={e}")
+        raise
