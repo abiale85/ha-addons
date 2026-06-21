@@ -282,7 +282,7 @@
 </div>
 
 <!-- Overlay di esecuzione strategia -->
-<div id="execution-overlay" class="d-none position-fixed top-0 start-0 w-100 h-100 bg-dark bg-opacity-75" style="z-index: 9999; display: flex !important; align-items: center; justify-content: center;">
+<div id="execution-overlay" class="d-none position-fixed top-0 start-0 w-100 h-100 bg-dark bg-opacity-75 align-items-center justify-content-center" style="z-index: 9999;">
   <div class="card bg-secondary text-white" style="width: 400px;">
     <div class="card-body text-center">
       <div class="spinner-border text-light mb-3" role="status">
@@ -340,6 +340,7 @@ async function _pollExecutionStatus() {
       if (!_executionInProgress) {
         _executionInProgress = true;
         overlay.classList.remove('d-none');
+        overlay.classList.add('d-flex');
       }
       elapsedEl.textContent = status.elapsed_sec.toFixed(1);
       if (status.manual) {
@@ -350,6 +351,7 @@ async function _pollExecutionStatus() {
     } else {
       if (_executionInProgress) {
         _executionInProgress = false;
+        overlay.classList.remove('d-flex');
         overlay.classList.add('d-none');
         if (_executionPollInterval) {
           clearInterval(_executionPollInterval);
