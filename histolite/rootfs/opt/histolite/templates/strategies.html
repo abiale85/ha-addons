@@ -307,7 +307,7 @@
 {% block scripts %}
 <script type="application/json" id="strategies-data">{{ saved_strategies | tojson }}</script>
 <script>
-// Mappa ID -> oggetto strategia (caricata da JSON tag sicuro per evitare </script> injection)
+// Mappa ID -> oggetto strategia caricata dal tag JSON dedicato.
 let _strategiesArr = [];
 try {
   _strategiesArr = JSON.parse(document.getElementById('strategies-data').textContent);
@@ -365,6 +365,7 @@ async function _pollExecutionStatus() {
 document.addEventListener('DOMContentLoaded', () => {
   updateFormParams();
   setupEntitySearch();
+  void _pollExecutionStatus();
 });
 
 function updateFormParams() {
@@ -612,7 +613,7 @@ async function executeSaved(id) {
     
     const result = await apiPost(`/api/execute-saved/${id}`, {});
     if (result.busy) {
-      showToast('Un'altra operazione è già in corso. Riprovare tra qualche istante.', 'warning');
+      showToast("Un'altra operazione è già in corso. Riprovare tra qualche istante.", 'warning');
       if (_executionPollInterval) {
         clearInterval(_executionPollInterval);
         _executionPollInterval = null;
@@ -635,10 +636,23 @@ async function executeSaved(id) {
   }
 }
 
+window.prefillForm = prefillForm;
+window.updateFormParams = updateFormParams;
+window.addEntityFromInput = addEntityFromInput;
+window.addEntity = addEntity;
+window.removeEntity = removeEntity;
+window.saveStrategy = saveStrategy;
+window.resetForm = resetForm;
+window.editSavedById = editSavedById;
+window.deleteSaved = deleteSaved;
+window.updateBulkDelete = updateBulkDelete;
+window.bulkDelete = bulkDelete;
+window.executeSaved = executeSaved;
+
 // Event listener per il bottone "Interrompi"
-document.getElementById('exec-cancel-btn').addEventListener('click', async () => {
+document.getElementById('exec-cancel-btn')?.addEventListener('click', async () => {
   try {
-    const result = await apiPost('/api/cancel-strategy', {});
+    await apiPost('/api/cancel-strategy', {});
     showToast('Interruzione richiesta…', 'warning');
   } catch(e) {
     showToast('Errore interruzione: ' + e.message, 'danger');
