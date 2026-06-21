@@ -96,28 +96,54 @@ def _overview_scheduler():
 # Garantisce che mai due strategie girino contemporaneamente sul DB.
 _strategy_lock = threading.Lock()
 
-def _run_strategy_safe(saved: dict) -> dict:
+# Tracciamento dello stato di esecuzione
+_running_strategy = None  # {'id': str, 'start_time': time, 'manual': bool, 'cancel_event': Event}
+_running_strategy_lock = threading.Lock()
+_cancel_strategy_event = threading.Event()
+
+def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
     """Esegue una strategia acquisendo il lock globale.
-    Tra batch successivi il thread cede il controllo (inter_batch_sleep)."""
+    Tra batch successivi il thread cede il controllo (inter_batch_sleep).
+    is_manual: True se richiesta manualmente, False se schedulata."""
+    global _running_strategy, _cancel_strategy_event
+    
     name = saved.get("name", saved["id"])
+    strategy_id = saved["id"]
     logger.info(f"[Scheduler] Avvio strategia '{name}'")
-    start = time.time()
-    result = execute_strategy(
-        db=db,
-        strategy_name=saved["strategy_type"],
-        entity_ids=saved.get("entity_ids", []),
-        params=saved.get("params", {}),
-        dry_run=False,
-        batch_size=MAX_ROWS_PER_BATCH,
-    )
-    result["duration_sec"] = round(time.time() - start, 2)
-    now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    config_manager.save_job(
-        result, saved["strategy_type"],
-        saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
-    )
-    config_manager.update_strategy_last_run(saved["id"], now_iso)
-    logger.info(f"[Scheduler] Completata '{name}' in {result['duration_sec']}s")
+    
+    # Traccia inizio esecuzione
+    with _running_strategy_lock:
+        _cancel_strategy_event.clear()
+        _running_strategy = {
+            'id': strategy_id,
+            'start_time': time.time(),
+            'manual': is_manual,
+        }
+    
+    try:
+        start = time.time()
+        result = execute_strategy(
+            db=db,
+            strategy_name=saved["strategy_type"],
+            entity_ids=saved.get("entity_ids", []),
+            params=saved.get("params", {}),
+            dry_run=False,
+            batch_size=MAX_ROWS_PER_BATCH,
+            cancel_event=_cancel_strategy_event,
+        )
+        result["duration_sec"] = round(time.time() - start, 2)
+        now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        config_manager.save_job(
+            result, saved["strategy_type"],
+            saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
+        )
+        config_manager.update_strategy_last_run(saved["id"], now_iso)
+        logger.info(f"[Scheduler] Completata '{name}' in {result['duration_sec']}s")
+        return result
+    finally:
+        # Pulisci stato di esecuzione
+        with _running_strategy_lock:
+            _running_strategy = None
     return result
 
 def _check_and_run_scheduled_strategies():
@@ -584,13 +610,45 @@ def api_execute_saved(strategy_id):
     if not _strategy_lock.acquire(timeout=5):
         return jsonify({"error": "Un'altra operazione e' gia' in esecuzione. Riprovare tra qualche istante.", "busy": True}), 409
     try:
-        result = _run_strategy_safe(saved)
+        result = _run_strategy_safe(saved, is_manual=True)
         return jsonify(result)
     except Exception as e:
         logger.error(f"Errore execute-saved {strategy_id}: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         _strategy_lock.release()
+
+
+@app.route("/api/strategy-status", methods=["GET"])
+def api_strategy_status():
+    """Ritorna lo stato di esecuzione della strategia in corso (se presente)."""
+    global _running_strategy
+    with _running_strategy_lock:
+        if _running_strategy is None:
+            return jsonify({"running": False})
+        
+        elapsed = time.time() - _running_strategy['start_time']
+        return jsonify({
+            "running": True,
+            "strategy_id": _running_strategy['id'],
+            "elapsed_sec": round(elapsed, 1),
+            "manual": _running_strategy['manual'],
+        })
+
+
+@app.route("/api/cancel-strategy", methods=["POST"])
+def api_cancel_strategy():
+    """Richiede l'interruzione della strategia in esecuzione (solo se manuale)."""
+    global _running_strategy, _cancel_strategy_event
+    with _running_strategy_lock:
+        if _running_strategy is None:
+            return jsonify({"error": "Nessuna strategia in esecuzione"}), 404
+        if not _running_strategy['manual']:
+            return jsonify({"error": "Impossibile cancellare una strategia pianificata"}), 403
+        
+        logger.info(f"[API] Richiesta cancellazione strategia {_running_strategy['id']}")
+        _cancel_strategy_event.set()
+        return jsonify({"message": "Interruzione richiesta"})
 
 
 # ---------------------------------------------------------------------------

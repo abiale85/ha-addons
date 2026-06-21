@@ -280,6 +280,28 @@
     </div>
   </div>
 </div>
+
+<!-- Overlay di esecuzione strategia -->
+<div id="execution-overlay" class="d-none position-fixed top-0 start-0 w-100 h-100 bg-dark bg-opacity-75" style="z-index: 9999; display: flex !important; align-items: center; justify-content: center;">
+  <div class="card bg-secondary text-white" style="width: 400px;">
+    <div class="card-body text-center">
+      <div class="spinner-border text-light mb-3" role="status">
+        <span class="visually-hidden">Esecuzione...</span>
+      </div>
+      <h5 class="card-title">Strategia in esecuzione</h5>
+      <p class="card-text small mb-2">
+        <span id="exec-elapsed-time">0.0</span> secondi
+      </p>
+      <p class="card-text small text-light mb-3">
+        Attendere il completamento...
+      </p>
+      <button id="exec-cancel-btn" class="btn btn-danger btn-sm d-none">
+        <i class="bi bi-stop-circle me-1"></i>Interrompi
+      </button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -302,6 +324,43 @@ let allSensorsList = [];
 let sensorSearchController = null;
 const pageController = new AbortController();
 window.addEventListener('beforeunload', () => pageController.abort());
+
+// Polling dello stato di esecuzione
+let _executionPollInterval = null;
+let _executionInProgress = false;
+
+async function _pollExecutionStatus() {
+  try {
+    const status = await apiFetch('/api/strategy-status');
+    const overlay = document.getElementById('execution-overlay');
+    const elapsedEl = document.getElementById('exec-elapsed-time');
+    const cancelBtn = document.getElementById('exec-cancel-btn');
+    
+    if (status.running) {
+      if (!_executionInProgress) {
+        _executionInProgress = true;
+        overlay.classList.remove('d-none');
+      }
+      elapsedEl.textContent = status.elapsed_sec.toFixed(1);
+      if (status.manual) {
+        cancelBtn.classList.remove('d-none');
+      } else {
+        cancelBtn.classList.add('d-none');
+      }
+    } else {
+      if (_executionInProgress) {
+        _executionInProgress = false;
+        overlay.classList.add('d-none');
+        if (_executionPollInterval) {
+          clearInterval(_executionPollInterval);
+          _executionPollInterval = null;
+        }
+      }
+    }
+  } catch(e) {
+    console.error('[HistoLite] Errore polling status:', e);
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   updateFormParams();
@@ -543,21 +602,47 @@ async function bulkDelete() {
 
 async function executeSaved(id) {
   if (!confirm('Eseguire questa strategia ora?')) return;
-  showToast('Esecuzione in corso…', 'info');
+  showToast('Avvio strategia…', 'info');
+  
   try {
+    // Avvia polling dello stato
+    if (!_executionPollInterval) {
+      _executionPollInterval = setInterval(_pollExecutionStatus, 500);
+    }
+    
     const result = await apiPost(`/api/execute-saved/${id}`, {});
     if (result.busy) {
-      showToast('Un’altra operazione è già in corso. Riprovare tra qualche istante.', 'warning');
+      showToast('Un'altra operazione è già in corso. Riprovare tra qualche istante.', 'warning');
+      if (_executionPollInterval) {
+        clearInterval(_executionPollInterval);
+        _executionPollInterval = null;
+      }
       return;
     }
-    showToast(
-      result.error ? `Errore: ${result.error}` :
-      `Completato! ${fmt(result.total_deleted)} record eliminati in ${result.duration_sec}s`,
-      result.error ? 'danger' : 'success'
-    );
+    
+    if (result.error) {
+      showToast(`Errore: ${result.error}`, 'danger');
+    } else {
+      showToast(
+        `Completato! ${fmt(result.total_deleted)} record eliminati in ${result.duration_sec}s`,
+        'success'
+      );
+    }
   } catch(e) {
     showToast('Errore: ' + e.message, 'danger');
+  } finally {
+    // Il polling continuerà finché il backend non ritorna running: false
   }
 }
+
+// Event listener per il bottone "Interrompi"
+document.getElementById('exec-cancel-btn').addEventListener('click', async () => {
+  try {
+    const result = await apiPost('/api/cancel-strategy', {});
+    showToast('Interruzione richiesta…', 'warning');
+  } catch(e) {
+    showToast('Errore interruzione: ' + e.message, 'danger');
+  }
+});
 </script>
 {% endblock %}

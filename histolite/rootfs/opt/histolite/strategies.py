@@ -27,6 +27,7 @@ class Strategy(ABC):
         params: dict,
         dry_run: bool = False,
         batch_size: int = 5000,
+        cancel_event = None,
     ) -> dict:
         ...
 
@@ -44,10 +45,13 @@ class SimplePurge(Strategy):
     label = "Purge Semplice"
     description = "Elimina tutti i record più vecchi di N giorni."
 
-    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 30))
         results = []
         for eid in entity_ids:
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"[SimplePurge] Cancellazione richiesta, interrotto a {eid}")
+                break
             try:
                 r = db.purge_entity(eid, older_than_days, dry_run=dry_run, batch_size=batch_size)
                 r["entity_id"] = eid
@@ -85,10 +89,13 @@ class TemporalDecimation(Strategy):
         "Mantiene 1 record/ora per dati > N giorni e 1 record/giorno per dati > 2N giorni."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 14))
         results = []
         for eid in entity_ids:
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"[TemporalDecimation] Cancellazione richiesta, interrotto a {eid}")
+                break
             try:
                 # Fase 1: appiattimento orario per dati > older_than_days
                 r1 = db.flatten_entity(
@@ -142,11 +149,14 @@ class RollingAverage(Strategy):
         "per i dati più vecchi di N giorni."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 7))
         granularity = params.get("granularity", "hour")  # "hour" o "day"
         results = []
         for eid in entity_ids:
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"[RollingAverage] Cancellazione richiesta, interrotto a {eid}")
+                break
             try:
                 stats = db.get_sensor_stats(eid)
                 if stats and not stats.get("is_numeric", False):
@@ -205,13 +215,16 @@ class AdaptivePurge(Strategy):
         "appiattisci progressivamente, elimina completamente > soglia_3 giorni."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         threshold_1 = int(params.get("threshold_1_days", 7))    # tutto
         threshold_2 = int(params.get("threshold_2_days", 30))   # orario
         threshold_3 = int(params.get("threshold_3_days", 90))   # giornaliero
         threshold_4 = int(params.get("threshold_4_days", 365))  # eliminazione
         results = []
         for eid in entity_ids:
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"[AdaptivePurge] Cancellazione richiesta, interrotto a {eid}")
+                break
             entity_result = {"entity_id": eid, "phases": []}
             total_deleted = 0
             try:
@@ -282,7 +295,7 @@ class OutlierPurge(Strategy):
         "o fuori N deviazioni standard dalla media storica."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         remove_negative = params.get("remove_negative", False)
         min_value = params.get("min_value")
         max_value = params.get("max_value")
@@ -300,6 +313,9 @@ class OutlierPurge(Strategy):
 
         results = []
         for eid in entity_ids:
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"[OutlierPurge] Cancellazione richiesta, interrotto a {eid}")
+                break
             try:
                 criteria = {
                     "remove_negative": remove_negative,
@@ -363,13 +379,16 @@ class PeakDecimation(Strategy):
         "Rileva e preserva automaticamente i punti di reset."
     )
 
-    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000):
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 7))
         granularity = params.get("granularity", "hour")
         keep_resets = bool(params.get("keep_resets", True))
         reset_threshold_pct = float(params.get("reset_threshold_pct", 50.0))
         results = []
         for eid in entity_ids:
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"[PeakDecimation] Cancellazione richiesta, interrotto a {eid}")
+                break
             try:
                 stats = db.get_sensor_stats(eid)
                 if stats and not stats.get("is_numeric", False):
@@ -514,12 +533,14 @@ def execute_strategy(
     params: dict,
     dry_run: bool = False,
     batch_size: int = 5000,
+    cancel_event = None,
 ) -> dict:
-    """Esegue una strategia per nome."""
+    """Esegue una strategia per nome.
+    cancel_event: threading.Event per richiedere interruzione della strategia."""
     cls = STRATEGY_REGISTRY.get(strategy_name)
     if not cls:
         return {"error": f"Strategia sconosciuta: {strategy_name}"}
     return cls().execute(
         db, entity_ids, params, dry_run=dry_run,
-        batch_size=batch_size,
+        batch_size=batch_size, cancel_event=cancel_event,
     )
