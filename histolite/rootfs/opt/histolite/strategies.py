@@ -11,6 +11,28 @@ from database import HaDatabase
 logger = logging.getLogger(__name__)
 
 
+def _run_with_retry(strategy_label: str, entity_id: str, operation, retry_attempts: int = 2, retry_delay_sec: float = 1.0):
+    """Esegue un'operazione su una singola entità con retry limitati."""
+    attempts = max(1, int(retry_attempts))
+    delay = max(0.0, float(retry_delay_sec))
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            if attempt > 1:
+                logger.info(f"[{strategy_label}] Retry {attempt}/{attempts} su {entity_id}")
+            return operation(attempt)
+        except Exception as e:
+            last_error = e
+            if attempt >= attempts:
+                raise
+            logger.warning(
+                f"[{strategy_label}] Fallimento su {entity_id} (tentativo {attempt}/{attempts}): {e}; retry tra {delay}s"
+            )
+            time.sleep(delay)
+    if last_error is not None:
+        raise last_error
+
+
 # ---------------------------------------------------------------------------
 # Base class
 # ---------------------------------------------------------------------------
@@ -47,19 +69,27 @@ class SimplePurge(Strategy):
 
     def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 30))
+        retry_attempts = int(params.get("retry_attempts", 2))
+        retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
         results = []
         for eid in entity_ids:
             if cancel_event and cancel_event.is_set():
                 logger.info(f"[SimplePurge] Cancellazione richiesta, interrotto a {eid}")
                 break
             try:
-                r = db.purge_entity(eid, older_than_days, dry_run=dry_run, batch_size=batch_size)
+                r = _run_with_retry(
+                    "SimplePurge",
+                    eid,
+                    lambda attempt: db.purge_entity(eid, older_than_days, dry_run=dry_run, batch_size=batch_size),
+                    retry_attempts=retry_attempts,
+                    retry_delay_sec=retry_delay_sec,
+                )
                 r["entity_id"] = eid
                 results.append(r)
                 logger.info(f"[SimplePurge] {eid}: {'(DRY) ' if dry_run else ''}"
                             f"~{r.get('estimated', r.get('deleted', 0))} record")
             except Exception as e:
-                logger.error(f"[SimplePurge] Errore su {eid}: {e}")
+                logger.error(f"[SimplePurge] Errore su {eid} dopo {retry_attempts} tentativi: {e}")
                 results.append({"entity_id": eid, "error": str(e)})
 
         total_deleted = sum(r.get("deleted", r.get("estimated", 0)) for r in results)
@@ -91,21 +121,33 @@ class TemporalDecimation(Strategy):
 
     def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 14))
+        retry_attempts = int(params.get("retry_attempts", 2))
+        retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
         results = []
         for eid in entity_ids:
             if cancel_event and cancel_event.is_set():
                 logger.info(f"[TemporalDecimation] Cancellazione richiesta, interrotto a {eid}")
                 break
             try:
-                # Fase 1: appiattimento orario per dati > older_than_days
-                r1 = db.flatten_entity(
-                    eid, older_than_days, granularity="hour",
-                    dry_run=dry_run, batch_size=batch_size
-                )
-                # Fase 2: appiattimento giornaliero per dati > 2 * older_than_days
-                r2 = db.flatten_entity(
-                    eid, older_than_days * 2, granularity="day",
-                    dry_run=dry_run, batch_size=batch_size
+                def _op(_attempt: int):
+                    # Fase 1: appiattimento orario per dati > older_than_days
+                    r1 = db.flatten_entity(
+                        eid, older_than_days, granularity="hour",
+                        dry_run=dry_run, batch_size=batch_size
+                    )
+                    # Fase 2: appiattimento giornaliero per dati > 2 * older_than_days
+                    r2 = db.flatten_entity(
+                        eid, older_than_days * 2, granularity="day",
+                        dry_run=dry_run, batch_size=batch_size
+                    )
+                    return r1, r2
+
+                r1, r2 = _run_with_retry(
+                    "TemporalDecimation",
+                    eid,
+                    _op,
+                    retry_attempts=retry_attempts,
+                    retry_delay_sec=retry_delay_sec,
                 )
                 results.append({
                     "entity_id": eid,
@@ -118,7 +160,7 @@ class TemporalDecimation(Strategy):
                 })
                 logger.info(f"[TemporalDecimation] {eid}: completato")
             except Exception as e:
-                logger.error(f"[TemporalDecimation] Errore su {eid}: {e}")
+                logger.error(f"[TemporalDecimation] Errore su {eid} dopo {retry_attempts} tentativi: {e}")
                 results.append({"entity_id": eid, "error": str(e)})
 
         total_deleted = sum(r.get("total_deleted", 0) for r in results if "total_deleted" in r)
@@ -152,32 +194,47 @@ class RollingAverage(Strategy):
     def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 7))
         granularity = params.get("granularity", "hour")  # "hour" o "day"
+        retry_attempts = int(params.get("retry_attempts", 2))
+        retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
         results = []
         for eid in entity_ids:
             if cancel_event and cancel_event.is_set():
                 logger.info(f"[RollingAverage] Cancellazione richiesta, interrotto a {eid}")
                 break
             try:
-                stats = db.get_sensor_stats(eid)
-                if stats and not stats.get("is_numeric", False):
-                    results.append({
-                        "entity_id": eid,
-                        "skipped": True,
-                        "reason": "Sensore non numerico - strategia inapplicabile",
-                    })
-                    continue
+                def _op(_attempt: int):
+                    stats = db.get_sensor_stats(eid)
+                    if stats and not stats.get("is_numeric", False):
+                        return {
+                            "entity_id": eid,
+                            "skipped": True,
+                            "reason": "Sensore non numerico - strategia inapplicabile",
+                        }
 
-                r = db.flatten_entity(
-                    eid, older_than_days, granularity=granularity,
-                    dry_run=dry_run, batch_size=batch_size
+                    r = db.flatten_entity(
+                        eid, older_than_days, granularity=granularity,
+                        dry_run=dry_run, batch_size=batch_size
+                    )
+                    r["entity_id"] = eid
+                    return r
+
+                r = _run_with_retry(
+                    "RollingAverage",
+                    eid,
+                    _op,
+                    retry_attempts=retry_attempts,
+                    retry_delay_sec=retry_delay_sec,
                 )
+                if r.get("skipped"):
+                    results.append(r)
+                    continue
                 r["entity_id"] = eid
                 results.append(r)
                 logger.info(f"[RollingAverage] {eid}: "
                             f"{'(DRY) ' if dry_run else ''}"
                             f"~{r.get('deleted', r.get('estimated_deleted', 0))} eliminati")
             except Exception as e:
-                logger.error(f"[RollingAverage] Errore su {eid}: {e}")
+                logger.error(f"[RollingAverage] Errore su {eid} dopo {retry_attempts} tentativi: {e}")
                 results.append({"entity_id": eid, "error": str(e)})
 
         total_deleted = sum(
@@ -220,48 +277,58 @@ class AdaptivePurge(Strategy):
         threshold_2 = int(params.get("threshold_2_days", 30))   # orario
         threshold_3 = int(params.get("threshold_3_days", 90))   # giornaliero
         threshold_4 = int(params.get("threshold_4_days", 365))  # eliminazione
+        retry_attempts = int(params.get("retry_attempts", 2))
+        retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
         results = []
         for eid in entity_ids:
             if cancel_event and cancel_event.is_set():
                 logger.info(f"[AdaptivePurge] Cancellazione richiesta, interrotto a {eid}")
                 break
-            entity_result = {"entity_id": eid, "phases": []}
-            total_deleted = 0
             try:
-                # Fase A: appiattimento orario (threshold_1 ~ threshold_2)
-                if threshold_2 > threshold_1:
-                    r = db.flatten_entity(
-                        eid, threshold_1, granularity="hour",
-                        dry_run=dry_run, batch_size=batch_size
-                    )
-                    d = r.get("deleted", r.get("estimated_deleted", 0))
-                    total_deleted += d
-                    entity_result["phases"].append({"label": f"Orario (>{threshold_1}gg)", "deleted": d})
+                def _op(_attempt: int):
+                    entity_result = {"entity_id": eid, "phases": []}
+                    total_deleted = 0
 
-                # Fase B: appiattimento giornaliero (threshold_2 ~ threshold_3)
-                if threshold_3 > threshold_2:
-                    r = db.flatten_entity(
-                        eid, threshold_2, granularity="day",
-                        dry_run=dry_run, batch_size=batch_size
-                    )
-                    d = r.get("deleted", r.get("estimated_deleted", 0))
-                    total_deleted += d
-                    entity_result["phases"].append({"label": f"Giornaliero (>{threshold_2}gg)", "deleted": d})
+                    if threshold_2 > threshold_1:
+                        r = db.flatten_entity(
+                            eid, threshold_1, granularity="hour",
+                            dry_run=dry_run, batch_size=batch_size
+                        )
+                        d = r.get("deleted", r.get("estimated_deleted", 0))
+                        total_deleted += d
+                        entity_result["phases"].append({"label": f"Orario (>{threshold_1}gg)", "deleted": d})
 
-                # Fase C: eliminazione completa (> threshold_4)
-                if threshold_4 > threshold_3:
-                    r = db.purge_entity(
-                        eid, threshold_4, dry_run=dry_run, batch_size=batch_size
-                    )
-                    d = r.get("deleted", r.get("estimated", 0))
-                    total_deleted += d
-                    entity_result["phases"].append({"label": f"Eliminazione (>{threshold_4}gg)", "deleted": d})
+                    if threshold_3 > threshold_2:
+                        r = db.flatten_entity(
+                            eid, threshold_2, granularity="day",
+                            dry_run=dry_run, batch_size=batch_size
+                        )
+                        d = r.get("deleted", r.get("estimated_deleted", 0))
+                        total_deleted += d
+                        entity_result["phases"].append({"label": f"Giornaliero (>{threshold_2}gg)", "deleted": d})
 
-                entity_result["total_deleted"] = total_deleted
+                    if threshold_4 > threshold_3:
+                        r = db.purge_entity(
+                            eid, threshold_4, dry_run=dry_run, batch_size=batch_size
+                        )
+                        d = r.get("deleted", r.get("estimated", 0))
+                        total_deleted += d
+                        entity_result["phases"].append({"label": f"Eliminazione (>{threshold_4}gg)", "deleted": d})
+
+                    entity_result["total_deleted"] = total_deleted
+                    return entity_result
+
+                entity_result = _run_with_retry(
+                    "AdaptivePurge",
+                    eid,
+                    _op,
+                    retry_attempts=retry_attempts,
+                    retry_delay_sec=retry_delay_sec,
+                )
                 results.append(entity_result)
-                logger.info(f"[AdaptivePurge] {eid}: {total_deleted} eliminati")
+                logger.info(f"[AdaptivePurge] {eid}: {entity_result.get('total_deleted', 0)} eliminati")
             except Exception as e:
-                logger.error(f"[AdaptivePurge] Errore su {eid}: {e}")
+                logger.error(f"[AdaptivePurge] Errore su {eid} dopo {retry_attempts} tentativi: {e}")
                 results.append({"entity_id": eid, "error": str(e)})
 
         total = sum(r.get("total_deleted", 0) for r in results if "total_deleted" in r)
@@ -301,6 +368,8 @@ class OutlierPurge(Strategy):
         max_value = params.get("max_value")
         std_mult = params.get("std_dev_multiplier")
         state_blacklist = params.get("state_blacklist", [])
+        retry_attempts = int(params.get("retry_attempts", 2))
+        retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
 
         if not any([remove_negative, min_value is not None, max_value is not None,
                     std_mult is not None, state_blacklist]):
@@ -324,25 +393,34 @@ class OutlierPurge(Strategy):
                     "std_dev_multiplier": std_mult,
                     "state_blacklist": state_blacklist,
                 }
-                if dry_run:
-                    r = db.preview_anomalies(eid, criteria)
-                    results.append({
-                        "entity_id": eid,
-                        "estimated": r.get("count", 0),
-                        "samples": r.get("samples", []),
-                        "dry_run": True,
-                    })
-                else:
+                def _op(_attempt: int):
+                    if dry_run:
+                        r = db.preview_anomalies(eid, criteria)
+                        return {
+                            "entity_id": eid,
+                            "estimated": r.get("count", 0),
+                            "samples": r.get("samples", []),
+                            "dry_run": True,
+                        }
                     r = db.delete_anomalies(eid, criteria, batch_size=batch_size)
-                    results.append({
+                    return {
                         "entity_id": eid,
                         "deleted": r.get("deleted", 0),
                         "total_found": r.get("total_found", 0),
-                    })
+                    }
+
+                r = _run_with_retry(
+                    "OutlierPurge",
+                    eid,
+                    _op,
+                    retry_attempts=retry_attempts,
+                    retry_delay_sec=retry_delay_sec,
+                )
+                results.append(r)
                 logger.info(f"[OutlierPurge] {eid}: {'(DRY) ' if dry_run else ''}"
                             f"{r.get('count', r.get('deleted', 0))} record anomali")
             except Exception as e:
-                logger.error(f"[OutlierPurge] Errore su {eid}: {e}")
+                logger.error(f"[OutlierPurge] Errore su {eid} dopo {retry_attempts} tentativi: {e}")
                 results.append({"entity_id": eid, "error": str(e)})
 
         key = "estimated" if dry_run else "deleted"
@@ -384,29 +462,44 @@ class PeakDecimation(Strategy):
         granularity = params.get("granularity", "hour")
         keep_resets = bool(params.get("keep_resets", True))
         reset_threshold_pct = float(params.get("reset_threshold_pct", 50.0))
+        retry_attempts = int(params.get("retry_attempts", 2))
+        retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
         results = []
         for eid in entity_ids:
             if cancel_event and cancel_event.is_set():
                 logger.info(f"[PeakDecimation] Cancellazione richiesta, interrotto a {eid}")
                 break
             try:
-                stats = db.get_sensor_stats(eid)
-                if stats and not stats.get("is_numeric", False):
-                    results.append({
-                        "entity_id": eid,
-                        "skipped": True,
-                        "reason": "Sensore non numerico - strategia inapplicabile",
-                    })
-                    continue
+                def _op(_attempt: int):
+                    stats = db.get_sensor_stats(eid)
+                    if stats and not stats.get("is_numeric", False):
+                        return {
+                            "entity_id": eid,
+                            "skipped": True,
+                            "reason": "Sensore non numerico - strategia inapplicabile",
+                        }
 
-                r = db.peak_decimate_entity(
-                    eid, older_than_days,
-                    granularity=granularity,
-                    keep_resets=keep_resets,
-                    reset_threshold_pct=reset_threshold_pct,
-                    dry_run=dry_run,
-                    batch_size=batch_size,
+                    r = db.peak_decimate_entity(
+                        eid, older_than_days,
+                        granularity=granularity,
+                        keep_resets=keep_resets,
+                        reset_threshold_pct=reset_threshold_pct,
+                        dry_run=dry_run,
+                        batch_size=batch_size,
+                    )
+                    r["entity_id"] = eid
+                    return r
+
+                r = _run_with_retry(
+                    "PeakDecimation",
+                    eid,
+                    _op,
+                    retry_attempts=retry_attempts,
+                    retry_delay_sec=retry_delay_sec,
                 )
+                if r.get("skipped"):
+                    results.append(r)
+                    continue
                 r["entity_id"] = eid
                 results.append(r)
                 reset_info = f", {r.get('reset_points', 0)} reset preservati" if keep_resets else ""
@@ -417,7 +510,7 @@ class PeakDecimation(Strategy):
                     f"{reset_info}"
                 )
             except Exception as e:
-                logger.error(f"[PeakDecimation] Errore su {eid}: {e}")
+                logger.error(f"[PeakDecimation] Errore su {eid} dopo {retry_attempts} tentativi: {e}")
                 results.append({"entity_id": eid, "error": str(e)})
 
         total_deleted = sum(

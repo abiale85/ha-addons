@@ -142,14 +142,14 @@ class HaDatabase:
         Non include parametri sensibili, ma fornisce una versione abbreviata della SQL
         e il tempo impiegato in millisecondi.
         """
-        if not logger.isEnabledFor(logging.DEBUG):
-            return
         short_sql = " ".join(sql.strip().split())
         if len(short_sql) > 300:
             short_sql = short_sql[:300] + "..."
         ms = int(duration * 1000)
         self._query_counter += 1
-        logger.debug(f"[DBQuery#{self._query_counter}] duration_ms={ms} sql={short_sql}")
+        logger.info(f"[DBQuery#{self._query_counter}] duration_ms={ms} sql={short_sql}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"[DBQuery#{self._query_counter}] params={params!r}")
 
     def _get_metadata_id(self, conn: sqlite3.Connection, entity_id: str) -> Optional[int]:
         """Nuovo schema HA: risolve entity_id → metadata_id tramite states_meta."""
@@ -693,7 +693,7 @@ class HaDatabase:
                 id_param = entity_id
 
             count_query = f"SELECT COUNT(*) AS c FROM states s WHERE {id_filter} AND {cond}"
-            params_count = [id_param]
+            params_count: list[object] = [id_param]
             if param is not None:
                 params_count.append(param)
             start_t = time.time()
