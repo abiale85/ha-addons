@@ -286,7 +286,14 @@
 <script type="application/json" id="strategies-data">{{ saved_strategies | tojson }}</script>
 <script>
 // Mappa ID -> oggetto strategia (caricata da JSON tag sicuro per evitare </script> injection)
-const _strategiesArr = JSON.parse(document.getElementById('strategies-data').textContent);
+let _strategiesArr = [];
+try {
+  _strategiesArr = JSON.parse(document.getElementById('strategies-data').textContent);
+  if (!Array.isArray(_strategiesArr)) _strategiesArr = [];
+} catch (err) {
+  console.error('[HistoLite] JSON parse error:', err);
+  _strategiesArr = [];
+}
 const STRATEGIES_MAP = {};
 _strategiesArr.forEach(s => { STRATEGIES_MAP[String(s.id)] = s; });
 
