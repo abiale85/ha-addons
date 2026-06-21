@@ -45,14 +45,16 @@ class CacheManager:
                 timestamp = entry.get("timestamp")
                 ttl_seconds = entry.get("ttl_seconds")
                 value = entry.get("value")
-                if not isinstance(timestamp, (int, float)) or not isinstance(ttl_seconds, (int, float)):
+                if not isinstance(timestamp, (int, float)):
                     continue
-                if now - timestamp > ttl_seconds:
+                if ttl_seconds is not None and not isinstance(ttl_seconds, (int, float)):
+                    continue
+                if ttl_seconds is not None and now - timestamp > ttl_seconds:
                     continue
                 loaded[key] = {
                     "value": value,
                     "timestamp": float(timestamp),
-                    "ttl_seconds": int(ttl_seconds),
+                    "ttl_seconds": None if ttl_seconds is None else int(ttl_seconds),
                 }
 
             self.cache = loaded
@@ -80,7 +82,10 @@ class CacheManager:
     def _evict_expired(self):
         """Rimuove tutte le voci scadute."""
         now = time.time()
-        expired = [k for k, v in self.cache.items() if now - v["timestamp"] > v["ttl_seconds"]]
+        expired = [
+            key for key, value in self.cache.items()
+            if value["ttl_seconds"] is not None and now - value["timestamp"] > value["ttl_seconds"]
+        ]
         for key in expired:
             del self.cache[key]
 
@@ -91,7 +96,7 @@ class CacheManager:
 
         entry = self.cache[key]
         age = time.time() - entry["timestamp"]
-        if age > entry["ttl_seconds"]:
+        if entry["ttl_seconds"] is not None and age > entry["ttl_seconds"]:
             logger.debug(f"Cache {key} scaduto (age={age:.0f}s, TTL={entry['ttl_seconds']}s)")
             del self.cache[key]
             self._save_to_disk()
@@ -100,7 +105,7 @@ class CacheManager:
         logger.debug(f"Cache {key} valido (age={age:.0f}s)")
         return entry["value"]
 
-    def set(self, key: str, value: Any, ttl_seconds: int = 300):
+    def set(self, key: str, value: Any, ttl_seconds: Optional[int] = 300):
         """Salva valore in cache con TTL e persistenza su disco."""
         self._evict_expired()
         if len(self.cache) >= _MAX_CACHE_ENTRIES and key not in self.cache:
@@ -113,7 +118,9 @@ class CacheManager:
             "timestamp": time.time(),
             "ttl_seconds": ttl_seconds,
         }
-        logger.debug(f"Cache {key} impostato con TTL {ttl_seconds}s")
+        logger.debug(
+            f"Cache {key} impostato con TTL {'infinito' if ttl_seconds is None else str(ttl_seconds) + 's'}"
+        )
         self._save_to_disk()
         gc.collect()
 
@@ -122,7 +129,8 @@ class CacheManager:
         if key not in self.cache:
             return None
         age = time.time() - self.cache[key]["timestamp"]
-        return age if age <= self.cache[key]["ttl_seconds"] else None
+        ttl_seconds = self.cache[key]["ttl_seconds"]
+        return age if ttl_seconds is None or age <= ttl_seconds else None
 
     def invalidate(self, key: str):
         """Invalida immediatamente una chiave di cache."""

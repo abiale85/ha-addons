@@ -192,15 +192,11 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', () => {
-  // Mostra cached se disponibile, altrimenti aspetta il bottone
-  const cached = sessionStorage.getItem('hl_overview_loaded');
-  if (cached === '1') {
-    loadDashboard();
-  }
+  loadDashboard();
 });
 
 async function loadDashboard() {
-  showGlobalLoading('Calcolo statistiche database in corso…');
+  showGlobalLoading('Caricamento ultime statistiche salvate…');
   try {
     // Mostra spinner durante il caricamento (query puo' essere lenta su DB grande)
     ['kpi-states','kpi-size','kpi-sensors','kpi-top10'].forEach(id => {
@@ -211,6 +207,16 @@ async function loadDashboard() {
     const data = await apiGet('/api/overview', { timeout: 120000 });
     console.log('[HistoLite] Risposta overview:', data);
     if (data.error) { showToast(data.error, 'danger'); return; }
+    if (data.no_cache) {
+      document.getElementById('refresh-btn').disabled = false;
+      sessionStorage.removeItem('hl_overview_loaded');
+      ['kpi-states','kpi-size','kpi-sensors','kpi-top10'].forEach(id => {
+        document.getElementById(id).textContent = '—';
+      });
+      document.getElementById('top10-body').innerHTML =
+        '<tr><td colspan="6" class="text-center text-muted py-3">Nessuna statistica salvata. Usa Aggiorna o Carica statistiche.</td></tr>';
+      return;
+    }
 
     // Avviso schema non riconosciuto - mostrato come banner permanente
     if (data.schema_warning) {

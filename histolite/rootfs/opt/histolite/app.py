@@ -68,7 +68,7 @@ def _run_overview_bg():
         logger.info("Background: avvio calcolo overview...")
         data = get_db_overview(db)
         if "error" not in data:
-            cache.set("overview", data, ttl_seconds=300)
+            cache.set("overview", data, ttl_seconds=None)
             logger.info("Background: overview aggiornato in cache")
         else:
             logger.warning(f"Background overview errore: {data['error']}")
@@ -288,7 +288,7 @@ def jobs_page():
 
 @app.route("/api/overview")
 def api_overview():
-    """Ritorna panoramica DB con cache. Il calcolo avviene inline (lock previene parallelismo)."""
+    """Ritorna l'ultima overview salvata. Nessun ricalcolo automatico qui."""
     try:
         cached = cache.get_with_metadata("overview")
         if cached:
@@ -299,36 +299,27 @@ def api_overview():
             data["computing"] = _overview_lock.locked()
             logger.info(f"Overview da cache (eta {cached['age_seconds']:.0f}s, computing={data['computing']})")
             return jsonify(data)
-
-        # Nessuna cache: acquisisce il lock e calcola direttamente in questo thread.
-        # Se un altro thread sta gia calcolando, aspetta che finisca (double-check cache dopo).
-        logger.info("Overview: nessuna cache, avvio calcolo on-demand...")
-        if not _overview_lock.acquire(timeout=120):
-            return jsonify({"error": "Timeout attesa calcolo overview, riprovare"}), 503
-        try:
-            # Double-check: un altro thread potrebbe aver completato mentre aspettavamo
-            cached = cache.get_with_metadata("overview")
-            if cached:
-                data = dict(cached["value"])
-                data["cached"] = True
-                data["updated_timestamp"] = int(cached["timestamp_updated"])
-                data["age_seconds"] = int(cached["age_seconds"])
-                data["computing"] = False
-                return jsonify(data)
-            # Calcola direttamente (nessun thread background)
-            result = get_db_overview(db)
-            if "error" not in result:
-                cache.set("overview", result, ttl_seconds=300)
-                logger.info("Overview calcolato e salvato in cache")
-                resp = dict(result)
-                resp["cached"] = False
-                resp["computing"] = False
-                return jsonify(resp)
-            return jsonify({"error": result["error"]}), 500
-        finally:
-            _overview_lock.release()
+        return jsonify({
+            "no_cache": True,
+            "cached": False,
+            "computing": _overview_lock.locked(),
+        })
     except Exception as e:
         logger.error(f"Errore api/overview: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/db-size")
+def api_db_size():
+    """Endpoint leggero per mostrare la dimensione del DB senza calcolare l'overview."""
+    try:
+        db_size = db.get_db_size()
+        return jsonify({
+            "db_size_bytes": db_size,
+            "db_size_human": f"{db_size / (1024 ** 3):.1f} GB" if db_size >= 1024 ** 3 else f"{db_size / (1024 ** 2):.1f} MB",
+        })
+    except Exception as e:
+        logger.error(f"Errore api/db-size: {e}")
         return jsonify({"error": str(e)}), 500
 
 

@@ -161,7 +161,7 @@ function showToast(message, type = 'info', duration = 4000) {
 
 async function updateDbSizeBadge() {
   try {
-    const data = await apiGet('/api/overview');
+    const data = await apiGet('/api/db-size');
     const el = document.getElementById('db-size-val');
     if (el && data.db_size_human) el.textContent = data.db_size_human;
   } catch {}
