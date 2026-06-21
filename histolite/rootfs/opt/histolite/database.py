@@ -136,20 +136,26 @@ class HaDatabase:
                 None,
             )
 
-    def _log_query(self, sql: str, params, duration: float) -> None:
-        """Logga informazioni sulle query quando il livello è DEBUG.
+    def _log_query_start(self, sql: str, params) -> int:
+        """Logga l'inizio di una query in esecuzione quando il livello è DEBUG e restituisce il numero di query."""
+        if not logger.isEnabledFor(logging.DEBUG):
+            return 0
+        short_sql = " ".join(sql.strip().split())
+        if len(short_sql) > 300:
+            short_sql = short_sql[:300] + "..."
+        self._query_counter += 1
+        counter = self._query_counter
+        logger.debug(f"[DBQuerySTART#{counter}] in esecuzione: {short_sql} params={params!r}")
+        return counter
 
-        Non include parametri sensibili, ma fornisce una versione abbreviata della SQL
-        e il tempo impiegato in millisecondi.
-        """
+    def _log_query(self, sql: str, duration: float, counter: int = 0) -> None:
+        """Logga la fine e durata di una query."""
         short_sql = " ".join(sql.strip().split())
         if len(short_sql) > 300:
             short_sql = short_sql[:300] + "..."
         ms = int(duration * 1000)
-        self._query_counter += 1
-        logger.info(f"[DBQuery#{self._query_counter}] duration_ms={ms} sql={short_sql}")
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"[DBQuery#{self._query_counter}] params={params!r}")
+        c_str = str(counter) if counter > 0 else "?"
+        logger.info(f"[DBQueryEND#{c_str}] duration_ms={ms} sql={short_sql}")
 
     def _get_metadata_id(self, conn: sqlite3.Connection, entity_id: str) -> Optional[int]:
         """Nuovo schema HA: risolve entity_id → metadata_id tramite states_meta."""
@@ -697,8 +703,9 @@ class HaDatabase:
             if param is not None:
                 params_count.append(param)
             start_t = time.time()
+            c_qid = self._log_query_start(count_query, params_count)
             count_row = conn.execute(count_query, params_count).fetchone()
-            self._log_query(count_query, params_count, time.time() - start_t)
+            self._log_query(count_query, time.time() - start_t, c_qid)
             total_to_delete = count_row["c"] if count_row else 0
 
             if dry_run or total_to_delete == 0:
@@ -729,6 +736,7 @@ class HaDatabase:
                 placeholders = ",".join("?" * len(id_list))
                 # time the cleanup/update and delete statements
                 t0 = time.time()
+                bqid = self._log_query_start(f"UPDATE/DELETE batch ({len(id_list)})", id_list)
                 conn.execute(
                     f"UPDATE states SET old_state_id = NULL "
                     f"WHERE old_state_id IN ({placeholders})",
@@ -738,10 +746,13 @@ class HaDatabase:
                     f"DELETE FROM states WHERE state_id IN ({placeholders})", id_list
                 )
                 conn.commit()
-                self._log_query(f"UPDATE/DELETE batch ({len(id_list)})", id_list, time.time() - t0)
+                self._log_query(f"UPDATE/DELETE batch ({len(id_list)})", time.time() - t0, bqid)
                 deleted += len(id_list)
                 elapsed = time.time() - start_op
                 logger.info(f"[PurgeProgress] entity={entity_id} deleted={deleted}/{total_to_delete} elapsed_s={elapsed:.2f}")
+                # Riposo per non bloccare il database principale di HA
+                import time as _sys_time
+                _sys_time.sleep(0.5)
 
             return {"deleted": deleted, "estimated": total_to_delete, "dry_run": False}
 
@@ -816,12 +827,14 @@ class HaDatabase:
             """
 
             t0 = time.time()
+            c_qid = self._log_query_start(count_query, base_params)
             count_row = conn.execute(count_query, base_params).fetchone()
-            self._log_query(count_query, base_params, time.time() - t0)
+            self._log_query(count_query, time.time() - t0, c_qid)
             total_records = count_row["c"] if count_row else 0
             t1 = time.time()
+            b_qid = self._log_query_start(bucket_query, base_params)
             buckets = conn.execute(bucket_query, base_params).fetchall()
-            self._log_query(bucket_query, base_params, time.time() - t1)
+            self._log_query(bucket_query, time.time() - t1, b_qid)
             estimated_deleted = sum(b["bucket_count"] - 1 for b in buckets)
 
             if dry_run:
@@ -870,6 +883,7 @@ class HaDatabase:
                 id_list = [r["state_id"] for r in to_delete]
                 placeholders = ",".join("?" * len(id_list))
                 t_batch = time.time()
+                fb_qid = self._log_query_start(f"flatten batch ({len(id_list)})", id_list)
                 conn.execute(
                     f"UPDATE states SET old_state_id = NULL "
                     f"WHERE old_state_id IN ({placeholders})",
@@ -879,10 +893,14 @@ class HaDatabase:
                     f"DELETE FROM states WHERE state_id IN ({placeholders})", id_list
                 )
                 conn.commit()
-                self._log_query(f"flatten batch ({len(id_list)})", id_list, time.time() - t_batch)
+                self._log_query(f"flatten batch ({len(id_list)})", time.time() - t_batch, fb_qid)
                 deleted += len(id_list)
                 elapsed = time.time() - start_op
                 logger.info(f"[FlattenProgress] entity={entity_id} bucket={idx}/{len(buckets)} deleted_total={deleted} elapsed_s={elapsed:.2f}")
+                # Riposo per non bloccare il database principale di HA
+                import time as _sys_time
+                if idx % 10 == 0:
+                    _sys_time.sleep(0.2)
 
             conn.commit()
             return {
@@ -956,10 +974,11 @@ class HaDatabase:
 
             # Conteggio totale
             t0 = time.time()
+            c_qid = self._log_query_start("COUNT total_records", base_params)
             total_records = conn.execute(
                 f"SELECT COUNT(*) AS c FROM states WHERE {where_clause}", base_params
             ).fetchone()["c"]
-            self._log_query(f"COUNT total_records", base_params, time.time() - t0)
+            self._log_query(f"COUNT total_records", time.time() - t0, c_qid)
 
             if total_records == 0:
                 return {"total_records": 0, "buckets": 0,
@@ -986,8 +1005,9 @@ class HaDatabase:
                 ) t WHERE rn = 1 AND bucket_count > 1
             """
             t1 = time.time()
+            bq_id = self._log_query_start(bucket_query, base_params)
             keep_rows = conn.execute(bucket_query, base_params).fetchall()
-            self._log_query(bucket_query, base_params, time.time() - t1)
+            self._log_query(bucket_query, time.time() - t1, bq_id)
             keep_ids: set = {r["state_id"] for r in keep_rows}
             num_buckets = len(keep_rows)
 
@@ -1005,8 +1025,9 @@ class HaDatabase:
                     ORDER BY {order_col} ASC
                 """
                 t2 = time.time()
+                vq_id = self._log_query_start(vals_query, base_params)
                 vals = conn.execute(vals_query, base_params).fetchall()
-                self._log_query(vals_query, base_params, time.time() - t2)
+                self._log_query(vals_query, time.time() - t2, vq_id)
                 prev_id, prev_val = None, None
                 for row in vals:
                     curr_id = row["state_id"]
@@ -1058,16 +1079,20 @@ class HaDatabase:
                 batch_chunk = batch_ids[:batch_size]
                 ph = ",".join("?" * len(batch_chunk))
                 t_b = time.time()
+                pb_qid = self._log_query_start(f"peak_decimate batch ({len(batch_chunk)})", batch_chunk)
                 conn.execute(
                     f"UPDATE states SET old_state_id = NULL "
                     f"WHERE old_state_id IN ({ph})", batch_chunk
                 )
                 conn.execute(f"DELETE FROM states WHERE state_id IN ({ph})", batch_chunk)
                 conn.commit()
-                self._log_query(f"peak_decimate batch ({len(batch_chunk)})", batch_chunk, time.time() - t_b)
+                self._log_query(f"peak_decimate batch ({len(batch_chunk)})", time.time() - t_b, pb_qid)
                 deleted += len(batch_chunk)
                 elapsed = time.time() - start_op
                 logger.info(f"[PeakDecimateProgress] entity={entity_id} deleted_total={deleted} estimated={estimated_deleted} elapsed_s={elapsed:.2f}")
+                # Riposo per non bloccare il database principale di HA
+                import time as _sys_time
+                _sys_time.sleep(0.5)
 
                 # Se il batch processato era < batch_size abbiamo finito
                 if len(batch_ids) < batch_size:
@@ -1460,28 +1485,35 @@ class HaDatabase:
             if total == 0:
                 return {"deleted": 0}
             t0 = time.time()
+            c_qid = self._log_query_start("COUNT anomalies", params)
             # already counted above; log the count query timing
-            self._log_query(f"COUNT anomalies", params, time.time() - t0)
+            self._log_query(f"COUNT anomalies", time.time() - t0, c_qid)
 
             deleted = 0
             while True:
                 tq = time.time()
+                sq_id = self._log_query_start(f"select anomaly ids limit {batch_size}", params + [batch_size])
                 ids = conn.execute(
                     f"SELECT state_id FROM states WHERE {where} LIMIT ?",
                     params + [batch_size],
                 ).fetchall()
-                self._log_query(f"select anomaly ids limit {batch_size}", params + [batch_size], time.time() - tq)
+                self._log_query(f"select anomaly ids limit {batch_size}", time.time() - tq, sq_id)
                 if not ids:
                     break
                 id_list = [r["state_id"] for r in ids]
                 ph = ",".join("?" * len(id_list))
                 t_b = time.time()
+                db_qid = self._log_query_start(f"delete anomalies batch ({len(id_list)})", id_list)
                 conn.execute(f"UPDATE states SET old_state_id = NULL WHERE old_state_id IN ({ph})", id_list)
                 conn.execute(f"DELETE FROM states WHERE state_id IN ({ph})", id_list)
                 conn.commit()
-                self._log_query(f"delete anomalies batch ({len(id_list)})", id_list, time.time() - t_b)
+                self._log_query(f"delete anomalies batch ({len(id_list)})", time.time() - t_b, db_qid)
                 deleted += len(id_list)
                 logger.info(f"[AnomalyDeleteProgress] entity={entity_id} deleted_total={deleted} of={total}")
+                # Riposo per non bloccare il database principale di HA
+                import time as _sys_time
+                _sys_time.sleep(0.5)
+
                 if len(id_list) < batch_size:
                     break
 

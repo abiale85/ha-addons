@@ -359,6 +359,8 @@ async function _pollExecutionStatus() {
           clearInterval(_executionPollInterval);
           _executionPollInterval = null;
         }
+        // Ricarica la pagina per mostrare il nuovo last_run
+        window.location.reload();
       }
     }
   } catch(e) {

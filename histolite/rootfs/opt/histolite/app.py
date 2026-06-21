@@ -30,7 +30,7 @@ logger = logging.getLogger("histolite")
 
 DB_PATH = os.environ.get("DB_PATH", "/config/home-assistant_v2.db")
 DATA_PATH = os.environ.get("DATA_PATH", "/config")
-MAX_ROWS_PER_BATCH = int(os.environ.get("MAX_ROWS_PER_BATCH", "5000"))
+MAX_ROWS_PER_BATCH = int(os.environ.get("MAX_ROWS_PER_BATCH", "1000"))
 # INGRESS_PATH: HA Supervisor passa il prefisso come env var.
 # Ingress fa da reverse proxy e STRIPPA il prefisso prima di inviare la
 # richiesta al container → Flask riceve sempre path senza prefisso (es. GET /).
@@ -132,7 +132,7 @@ def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
             cancel_event=_cancel_strategy_event,
         )
         result["duration_sec"] = round(time.time() - start, 2)
-        now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        now_iso = datetime.now().isoformat(timespec="seconds")
         config_manager.save_job(
             result, saved["strategy_type"],
             saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
@@ -140,6 +140,15 @@ def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
         config_manager.update_strategy_last_run(saved["id"], now_iso)
         logger.info(f"[Scheduler] Completata '{name}' in {result['duration_sec']}s")
         return result
+    except Exception as e:
+        logger.error(f"[Scheduler] Errore esecuzione '{name}': {e}")
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        config_manager.update_strategy_last_run(saved["id"], now_iso)
+        config_manager.save_job(
+            {"error": str(e)}, saved["strategy_type"],
+            saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
+        )
+        raise
     finally:
         # Pulisci stato di esecuzione
         with _running_strategy_lock:
@@ -174,6 +183,10 @@ def _run_ad_hoc_strategy_safe(strategy_type: str, entity_ids: list[str], params:
         config_manager.save_job(result, strategy_type, entity_ids, params, dry_run=False)
         logger.info(f"[Scheduler] Completata esecuzione ad hoc '{strategy_type}' in {result['duration_sec']}s")
         return result
+    except Exception as e:
+        logger.error(f"[Scheduler] Errore esecuzione ad hoc '{strategy_type}': {e}")
+        config_manager.save_job({"error": str(e)}, strategy_type, entity_ids, params, dry_run=False)
+        raise
     finally:
         with _running_strategy_lock:
             _running_strategy = None
