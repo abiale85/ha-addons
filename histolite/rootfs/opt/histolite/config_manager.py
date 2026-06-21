@@ -4,6 +4,7 @@ HistoLite - Gestione configurazione strategie e log operazioni
 
 import json
 import os
+import shutil
 import uuid
 import logging
 from datetime import datetime
@@ -17,10 +18,27 @@ class ConfigManager:
 
     def __init__(self, data_path: str):
         self.data_dir = os.path.join(data_path, "histolite")
+        self.legacy_data_dir = "/data/histolite"
         os.makedirs(self.data_dir, exist_ok=True)
         self.strategies_file = os.path.join(self.data_dir, "strategies.json")
         self.jobs_file = os.path.join(self.data_dir, "jobs.json")
+        self._migrate_legacy_files()
         self._init_files()
+
+    def _migrate_legacy_files(self):
+        """Migra file persistiti nel vecchio path /data/histolite al nuovo /config/histolite."""
+        if os.path.abspath(self.data_dir) == os.path.abspath(self.legacy_data_dir):
+            return
+        for name in ("strategies.json", "jobs.json"):
+            src = os.path.join(self.legacy_data_dir, name)
+            dst = os.path.join(self.data_dir, name)
+            if os.path.exists(dst) or not os.path.exists(src):
+                continue
+            try:
+                shutil.copy2(src, dst)
+                logger.info(f"Migrato {name} da {src} a {dst}")
+            except OSError as e:
+                logger.warning(f"Impossibile migrare {src} -> {dst}: {e}")
 
     def _init_files(self):
         for f in (self.strategies_file, self.jobs_file):

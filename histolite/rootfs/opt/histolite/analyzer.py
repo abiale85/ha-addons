@@ -19,8 +19,9 @@ def get_db_overview(db: HaDatabase) -> dict:
         total_states = table_counts.get("states", 0)
         logger.info(f"DB overview: total_states={total_states}, schema={schema['timestamp_col']}, schema_type={schema.get('schema_type','?')}")
         
-        top_sensors = db.get_top_sensors(limit=10)
-        logger.info(f"Top sensori recuperati: {len(top_sensors)} risultati")
+        sensor_ranking = db.get_top_sensors(limit=500)
+        top_sensors = sensor_ranking[:10]
+        logger.info(f"Ranking sensori recuperato: {len(sensor_ranking)} risultati")
         if top_sensors:
             logger.debug(f"Primi sensori: {[s['entity_id'] for s in top_sensors[:3]]}")
 
@@ -38,6 +39,7 @@ def get_db_overview(db: HaDatabase) -> dict:
             "top_10_states": top_10_states,
             "top_10_pct": round(top_10_pct, 1),
             "top_sensors": top_sensors,
+            "sensor_ranking": sensor_ranking,
         }
         if schema_type == "unknown":
             result["schema_warning"] = (

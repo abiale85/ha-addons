@@ -6,6 +6,7 @@ import gc
 import json
 import logging
 import os
+import shutil
 import time
 from typing import Any, Optional
 
@@ -20,10 +21,25 @@ class CacheManager:
 
     def __init__(self, cache_dir: str = "/data"):
         self.data_dir = os.path.join(cache_dir, "histolite")
+        self.legacy_data_dir = "/data/histolite"
         os.makedirs(self.data_dir, exist_ok=True)
         self.cache_file = os.path.join(self.data_dir, "cache.json")
         self.cache: dict[str, dict[str, Any]] = {}
+        self._migrate_legacy_cache_file()
         self._load_from_disk()
+
+    def _migrate_legacy_cache_file(self):
+        """Migra il file cache dal vecchio path /data/histolite al nuovo /config/histolite."""
+        if os.path.abspath(self.data_dir) == os.path.abspath(self.legacy_data_dir):
+            return
+        legacy_cache_file = os.path.join(self.legacy_data_dir, "cache.json")
+        if os.path.exists(self.cache_file) or not os.path.exists(legacy_cache_file):
+            return
+        try:
+            shutil.copy2(legacy_cache_file, self.cache_file)
+            logger.info(f"Migrato cache overview da {legacy_cache_file} a {self.cache_file}")
+        except OSError as e:
+            logger.warning(f"Impossibile migrare cache da {legacy_cache_file}: {e}")
 
     def _load_from_disk(self):
         """Carica la cache persistita da disco e scarta le entry scadute/corrotte."""

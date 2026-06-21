@@ -14,7 +14,7 @@ fi
 DB_PATH="${DB_PATH:-/config/home-assistant_v2.db}"
 LOG_LEVEL="${LOG_LEVEL:-info}"
 MAX_ROWS_PER_BATCH="${MAX_ROWS_PER_BATCH:-5000}"
-DATA_PATH="/data"
+DATA_PATH="/config"
 
 # INGRESS_PATH: HA Supervisor imposta questa variabile con il path reale
 # (es. /api/hassio_ingress/TOKEN). Se non e' presente la lasciamo vuota;
@@ -26,8 +26,8 @@ echo "Database: $DB_PATH"
 echo "Ingress path: $INGRESS_PATH"
 echo "Log level: $LOG_LEVEL"
 
-# Crea directory dati se non esiste
-mkdir -p /data/histolite
+# Crea directory dati persistenti se non esiste
+mkdir -p /config/histolite
 
 # Esporta variabili d'ambiente
 export DB_PATH

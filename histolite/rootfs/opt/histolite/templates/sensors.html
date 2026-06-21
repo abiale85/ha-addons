@@ -258,7 +258,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Carica di default i top sensori dalla cache /api/overview
+  // Carica di default il ranking sensori dalle ultime statistiche salvate
   loadFromOverviewCache();
   // Ricerca live
   let debounce;
@@ -285,26 +285,49 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadFromOverviewCache() {
   const tbody = document.getElementById('sensors-body');
   tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento...</td></tr>';
-  document.getElementById('source-badge').textContent = 'lista';
-  document.getElementById('source-badge').className = 'badge bg-secondary';
+  document.getElementById('source-badge').textContent = 'cache';
+  document.getElementById('source-badge').className = 'badge bg-info';
 
   if (sensorLoadController) sensorLoadController.abort();
   sensorLoadController = new AbortController();
 
   try {
-    const entities = await apiFetch('/api/sensors/list', { signal: sensorLoadController.signal });
-    allSensors = (entities || []).map(e => ({ entity_id: e.entity_id, record_count: 0 }));
+    const overview = await apiFetch('/api/overview', {
+      signal: sensorLoadController.signal,
+      timeout: 10000,
+    });
+    const ranking = overview.sensor_ranking || overview.top_sensors || [];
+    if (overview.no_cache || !ranking.length) {
+      throw new Error('Nessuna statistica salvata disponibile');
+    }
+    allSensors = ranking.map(s => ({
+      entity_id: s.entity_id,
+      record_count: s.record_count || 0,
+      first_seen: s.first_seen,
+      last_seen: s.last_seen,
+    }));
     if (allSensors.length === 0) {
       tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">Nessuna entita trovata nel database.</td></tr>';
       document.getElementById('sensors-count').textContent = '0 entita';
       return;
     }
     sortAndRender();
-    document.getElementById('sensors-count').textContent = allSensors.length + ' entita';
-    document.getElementById('load-more-row').classList.remove('d-none');
+    document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
+    document.getElementById('load-more-row').classList.add('d-none');
   } catch(e) {
     if (e.name !== 'AbortError') {
-      tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger">${e.message}</td></tr>`;
+      document.getElementById('source-badge').textContent = 'lista';
+      document.getElementById('source-badge').className = 'badge bg-secondary';
+      const entities = await apiFetch('/api/sensors/list', { signal: sensorLoadController.signal });
+      allSensors = (entities || []).map(entity => ({ entity_id: entity.entity_id, record_count: 0 }));
+      if (allSensors.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">Nessuna entità trovata nel database.</td></tr>';
+        document.getElementById('sensors-count').textContent = '0 entità';
+        return;
+      }
+      sortAndRender();
+      document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
+      document.getElementById('load-more-row').classList.remove('d-none');
     }
   } finally {
     sensorLoadController = null;
