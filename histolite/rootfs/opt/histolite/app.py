@@ -146,6 +146,49 @@ def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
             _running_strategy = None
     return result
 
+
+def _run_ad_hoc_strategy_safe(strategy_type: str, entity_ids: list[str], params: dict) -> dict:
+    """Esegue una strategia non salvata in un worker dedicato."""
+    global _running_strategy, _cancel_strategy_event
+
+    with _running_strategy_lock:
+        _cancel_strategy_event.clear()
+        _running_strategy = {
+            'id': strategy_type,
+            'start_time': time.time(),
+            'manual': True,
+        }
+
+    try:
+        start = time.time()
+        result = execute_strategy(
+            db=db,
+            strategy_name=strategy_type,
+            entity_ids=entity_ids,
+            params=params,
+            dry_run=False,
+            batch_size=MAX_ROWS_PER_BATCH,
+            cancel_event=_cancel_strategy_event,
+        )
+        result["duration_sec"] = round(time.time() - start, 2)
+        config_manager.save_job(result, strategy_type, entity_ids, params, dry_run=False)
+        logger.info(f"[Scheduler] Completata esecuzione ad hoc '{strategy_type}' in {result['duration_sec']}s")
+        return result
+    finally:
+        with _running_strategy_lock:
+            _running_strategy = None
+
+
+def _start_strategy_worker(target, lock_label: str) -> None:
+    """Avvia un worker daemon e rilascia il lock al termine."""
+    def _wrapper():
+        try:
+            target()
+        finally:
+            _strategy_lock.release()
+
+    threading.Thread(target=_wrapper, name=lock_label, daemon=True).start()
+
 def _check_and_run_scheduled_strategies():
     """Controlla e avvia le strategie pianificate per questo minuto."""
     now = datetime.now()
@@ -572,21 +615,19 @@ def api_execute():
         if len(entity_ids) > 50:
             return jsonify({"error": "Massimo 50 entità per operazione"}), 400
 
-        start = time.time()
-        result = execute_strategy(
-            db=db,
-            strategy_name=strategy_type,
-            entity_ids=entity_ids,
-            params=params,
-            dry_run=False,
-            batch_size=MAX_ROWS_PER_BATCH,
+        if not _strategy_lock.acquire(timeout=5):
+            return jsonify({"error": "Un'altra operazione e' gia' in esecuzione. Riprovare tra qualche istante.", "busy": True}), 409
+
+        _start_strategy_worker(
+            lambda: _run_ad_hoc_strategy_safe(strategy_type, entity_ids, params),
+            f"strategy-{strategy_type}",
         )
-        result["duration_sec"] = round(time.time() - start, 2)
-
-        # Salva nel log
-        config_manager.save_job(result, strategy_type, entity_ids, params, dry_run=False)
-
-        return jsonify(result)
+        return jsonify({
+            "started": True,
+            "strategy_type": strategy_type,
+            "entity_count": len(entity_ids),
+            "manual": True,
+        }), 202
     except Exception as e:
         logger.error(f"Errore api/execute: {e}")
         return jsonify({"error": str(e)}), 500
@@ -601,13 +642,19 @@ def api_execute_saved(strategy_id):
     if not _strategy_lock.acquire(timeout=5):
         return jsonify({"error": "Un'altra operazione e' gia' in esecuzione. Riprovare tra qualche istante.", "busy": True}), 409
     try:
-        result = _run_strategy_safe(saved, is_manual=True)
-        return jsonify(result)
+        _start_strategy_worker(
+            lambda: _run_strategy_safe(saved, is_manual=True),
+            f"strategy-saved-{strategy_id}",
+        )
+        return jsonify({
+            "started": True,
+            "strategy_id": strategy_id,
+            "strategy_type": saved.get("strategy_type"),
+            "manual": True,
+        }), 202
     except Exception as e:
         logger.error(f"Errore execute-saved {strategy_id}: {e}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        _strategy_lock.release()
 
 
 @app.route("/api/strategy-status", methods=["GET"])

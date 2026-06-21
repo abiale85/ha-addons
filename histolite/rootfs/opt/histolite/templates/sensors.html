@@ -642,6 +642,10 @@ async function executeQuickStrategy() {
   showToast('Esecuzione in corso…', 'info');
   try {
     const result = await apiPost('/api/execute', { strategy_type: strategy, entity_ids, params });
+    if (result.started) {
+      showToast('Strategia avviata in background', 'info');
+      return;
+    }
     showToast(
       result.error ? `Errore: ${result.error}` :
       `Completato! ${fmt(result.total_deleted)} record in ${result.duration_sec}s`,

@@ -661,7 +661,11 @@ async function executeSaved(id) {
       }
       return;
     }
-    
+    if (result.started) {
+      showToast('Strategia avviata in background', 'info');
+      return;
+    }
+
     if (result.error) {
       showToast(`Errore: ${result.error}`, 'danger');
     } else {
