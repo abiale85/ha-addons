@@ -3,10 +3,11 @@ HistoLite - Gestione cache risultati query pesanti
 """
 
 import gc
-import time
+import json
 import logging
-import sys
-from typing import Optional, Any
+import os
+import time
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +16,73 @@ _MAX_CACHE_ENTRIES = 10
 
 
 class CacheManager:
-    """Gestisce cache di risultati query con TTL (time-to-live)."""
+    """Gestisce cache di risultati query con TTL e persistenza su disco."""
 
-    def __init__(self, cache_dir: str = "/data/histolite"):
-        self.cache_dir = cache_dir
-        self.cache = {}  # {key: {"value": data, "timestamp": ts, "ttl_seconds": ttl}}
+    def __init__(self, cache_dir: str = "/data"):
+        self.data_dir = os.path.join(cache_dir, "histolite")
+        os.makedirs(self.data_dir, exist_ok=True)
+        self.cache_file = os.path.join(self.data_dir, "cache.json")
+        self.cache: dict[str, dict[str, Any]] = {}
+        self._load_from_disk()
+
+    def _load_from_disk(self):
+        """Carica la cache persistita da disco e scarta le entry scadute/corrotte."""
+        if not os.path.exists(self.cache_file):
+            return
+
+        try:
+            with open(self.cache_file, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            if not isinstance(raw, dict):
+                logger.warning("Cache file non valido, reset")
+                return
+
+            now = time.time()
+            loaded = {}
+            for key, entry in raw.items():
+                if not isinstance(entry, dict):
+                    continue
+                timestamp = entry.get("timestamp")
+                ttl_seconds = entry.get("ttl_seconds")
+                value = entry.get("value")
+                if not isinstance(timestamp, (int, float)) or not isinstance(ttl_seconds, (int, float)):
+                    continue
+                if now - timestamp > ttl_seconds:
+                    continue
+                loaded[key] = {
+                    "value": value,
+                    "timestamp": float(timestamp),
+                    "ttl_seconds": int(ttl_seconds),
+                }
+
+            self.cache = loaded
+            if loaded:
+                logger.info(f"Cache ricaricata da disco: {len(loaded)} chiavi valide")
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Impossibile caricare cache persistita: {e}")
+            self.cache = {}
+
+    def _save_to_disk(self):
+        """Persisti su disco la cache corrente in formato JSON."""
+        tmp_file = self.cache_file + ".tmp"
+        try:
+            with open(tmp_file, "w", encoding="utf-8") as fh:
+                json.dump(self.cache, fh, ensure_ascii=False)
+            os.replace(tmp_file, self.cache_file)
+        except (OSError, TypeError) as e:
+            logger.warning(f"Impossibile salvare cache su disco: {e}")
+            try:
+                if os.path.exists(tmp_file):
+                    os.remove(tmp_file)
+            except OSError:
+                pass
+
+    def _evict_expired(self):
+        """Rimuove tutte le voci scadute."""
+        now = time.time()
+        expired = [k for k, v in self.cache.items() if now - v["timestamp"] > v["ttl_seconds"]]
+        for key in expired:
+            del self.cache[key]
 
     def get(self, key: str) -> Optional[Any]:
         """Ritorna valore dalla cache se valido, None altrimenti."""
@@ -28,22 +91,20 @@ class CacheManager:
 
         entry = self.cache[key]
         age = time.time() - entry["timestamp"]
-        
         if age > entry["ttl_seconds"]:
             logger.debug(f"Cache {key} scaduto (age={age:.0f}s, TTL={entry['ttl_seconds']}s)")
             del self.cache[key]
+            self._save_to_disk()
             return None
 
         logger.debug(f"Cache {key} valido (age={age:.0f}s)")
         return entry["value"]
 
     def set(self, key: str, value: Any, ttl_seconds: int = 300):
-        """Salva valore in cache con TTL. Evita crescita illimitata."""
-        # Rimuovi voci scadute prima di aggiungere
+        """Salva valore in cache con TTL e persistenza su disco."""
         self._evict_expired()
-        # Se ancora troppo piena, rimuovi la più vecchia
         if len(self.cache) >= _MAX_CACHE_ENTRIES and key not in self.cache:
-            oldest = min(self.cache, key=lambda k: self.cache[k]["timestamp"])
+            oldest = min(self.cache, key=lambda cache_key: self.cache[cache_key]["timestamp"])
             del self.cache[oldest]
             logger.debug(f"Cache evicted: {oldest}")
 
@@ -53,15 +114,8 @@ class CacheManager:
             "ttl_seconds": ttl_seconds,
         }
         logger.debug(f"Cache {key} impostato con TTL {ttl_seconds}s")
-        # Forza GC dopo aver salvato oggetti grandi in cache
+        self._save_to_disk()
         gc.collect()
-
-    def _evict_expired(self):
-        """Rimuove tutte le voci scadute."""
-        now = time.time()
-        expired = [k for k, v in self.cache.items() if now - v["timestamp"] > v["ttl_seconds"]]
-        for k in expired:
-            del self.cache[k]
 
     def get_age(self, key: str) -> Optional[float]:
         """Ritorna l'età della cache in secondi, o None se non presente."""
@@ -74,80 +128,20 @@ class CacheManager:
         """Invalida immediatamente una chiave di cache."""
         if key in self.cache:
             del self.cache[key]
+            self._save_to_disk()
             gc.collect()
             logger.info(f"Cache {key} invalidata")
 
     def get_with_metadata(self, key: str) -> Optional[dict]:
         """Ritorna {value, timestamp_updated, age_seconds} o None."""
-        if key not in self.cache:
+        value = self.get(key)
+        if value is None:
             return None
 
         entry = self.cache[key]
         age = time.time() - entry["timestamp"]
-        
-        if age > entry["ttl_seconds"]:
-            del self.cache[key]
-            return None
-
         return {
-            "value": entry["value"],
-            "timestamp_updated": entry["timestamp"],
-            "age_seconds": age,
-            "ttl_seconds": entry["ttl_seconds"],
-        }
-
-    def get(self, key: str) -> Optional[Any]:
-        """Ritorna valore dalla cache se valido, None altrimenti."""
-        if key not in self.cache:
-            return None
-
-        entry = self.cache[key]
-        age = time.time() - entry["timestamp"]
-        
-        if age > entry["ttl_seconds"]:
-            logger.debug(f"Cache {key} scaduto (age={age:.0f}s, TTL={entry['ttl_seconds']}s)")
-            del self.cache[key]
-            return None
-
-        logger.debug(f"Cache {key} valido (age={age:.0f}s)")
-        return entry["value"]
-
-    def set(self, key: str, value: Any, ttl_seconds: int = 300):
-        """Salva valore in cache con TTL."""
-        self.cache[key] = {
             "value": value,
-            "timestamp": time.time(),
-            "ttl_seconds": ttl_seconds,
-        }
-        logger.debug(f"Cache {key} impostato con TTL {ttl_seconds}s")
-
-    def get_age(self, key: str) -> Optional[float]:
-        """Ritorna l'età della cache in secondi, o None se non presente."""
-        if key not in self.cache:
-            return None
-        age = time.time() - self.cache[key]["timestamp"]
-        return age if age <= self.cache[key]["ttl_seconds"] else None
-
-    def invalidate(self, key: str):
-        """Invalida immediatamente una chiave di cache."""
-        if key in self.cache:
-            del self.cache[key]
-            logger.info(f"Cache {key} invalidata")
-
-    def get_with_metadata(self, key: str) -> Optional[dict]:
-        """Ritorna {value, timestamp_updated, age_seconds} o None."""
-        if key not in self.cache:
-            return None
-
-        entry = self.cache[key]
-        age = time.time() - entry["timestamp"]
-        
-        if age > entry["ttl_seconds"]:
-            del self.cache[key]
-            return None
-
-        return {
-            "value": entry["value"],
             "timestamp_updated": entry["timestamp"],
             "age_seconds": age,
             "ttl_seconds": entry["ttl_seconds"],
