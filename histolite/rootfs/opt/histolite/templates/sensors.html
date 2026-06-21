@@ -614,7 +614,7 @@ async function executeQuickStrategy() {
   const { strategy, params } = getQuickParams();
   const entity_ids = [...selectedIds];
   if (!entity_ids.length) { showToast('Seleziona almeno un sensore', 'warning'); return; }
-  if (!confirm(`Confermi "${strategy}" su ${entity_ids.length} entità?\nL'operazione non è reversibile (salvo backup).`)) return;
+  if (!confirm(`Confermi "${strategy}" su ${entity_ids.length} entità?\nL'operazione non è reversibile.`)) return;
   bootstrap.Modal.getInstance(document.getElementById('quickPurgeModal')).hide();
   showToast('Esecuzione in corso…', 'info');
   try {

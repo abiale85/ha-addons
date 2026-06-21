@@ -30,7 +30,6 @@ logger = logging.getLogger("histolite")
 
 DB_PATH = os.environ.get("DB_PATH", "/config/home-assistant_v2.db")
 DATA_PATH = os.environ.get("DATA_PATH", "/data")
-BACKUP_PATH = os.environ.get("BACKUP_PATH", "/backup")
 MAX_ROWS_PER_BATCH = int(os.environ.get("MAX_ROWS_PER_BATCH", "5000"))
 # INGRESS_PATH: HA Supervisor passa il prefisso come env var.
 # Ingress fa da reverse proxy e STRIPPA il prefisso prima di inviare la

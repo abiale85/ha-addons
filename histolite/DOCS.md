@@ -64,8 +64,6 @@ Cerca "HistoLite" nell'Add-on Store e clicca **Installa**.
 
 ```yaml
 db_path: /homeassistant/home-assistant_v2.db
-backup_before_purge: true
-backup_path: /backup
 log_level: info
 max_rows_per_batch: 5000
 ```
@@ -73,8 +71,6 @@ max_rows_per_batch: 5000
 | Opzione | Descrizione | Default |
 |---------|-------------|---------|
 | `db_path` | Percorso del database SQLite di HA | `/homeassistant/home-assistant_v2.db` |
-| `backup_before_purge` | Crea backup prima di ogni operazione distruttiva | `true` |
-| `backup_path` | Dove salvare i backup | `/backup` |
 | `log_level` | Livello di log (`debug`, `info`, `warning`, `error`) | `info` |
 | `max_rows_per_batch` | Record da elaborare per batch (ridurre in caso di problemi) | `5000` |
 
@@ -162,19 +158,13 @@ Accessibile da **Sensori → icona matita** o da **Dettaglio sensore → Modific
 - **Eliminazione bulk**: seleziona con checkbox → "Elimina N selezionati"
 - **Mini-grafico** a destra mostra l'andamento dei valori nel range filtrato
 
-> ⚠️ Le eliminazioni sono irreversibili salvo backup. Attiva `backup_before_purge: true` nelle opzioni.
+> ⚠️ Le eliminazioni sono irreversibili.
 
 ---
 
 ## Anteprima (Dry Run)
 
 Qualsiasi strategia può essere eseguita in **modalità anteprima** prima dell'applicazione reale. L'anteprima mostra il numero stimato di record che verrebbero modificati/eliminati senza toccare il database.
-
----
-
-## Backup
-
-Se `backup_before_purge: true`, prima di ogni operazione distruttiva viene creato automaticamente un backup del database nella cartella `/backup/histolite_backup_YYYYMMDD_HHMMSS.db`.
 
 ---
 
@@ -289,8 +279,6 @@ Cerca "HistoLite" nell'Add-on Store e clicca **Installa**.
 
 ```yaml
 db_path: /homeassistant/home-assistant_v2.db
-backup_before_purge: true
-backup_path: /backup
 log_level: info
 max_rows_per_batch: 5000
 ```
@@ -298,8 +286,6 @@ max_rows_per_batch: 5000
 | Opzione | Descrizione | Default |
 |---------|-------------|---------|
 | `db_path` | Percorso del database SQLite di HA | `/homeassistant/home-assistant_v2.db` |
-| `backup_before_purge` | Crea backup prima di ogni operazione distruttiva | `true` |
-| `backup_path` | Dove salvare i backup | `/backup` |
 | `log_level` | Livello di log (`debug`, `info`, `warning`, `error`) | `info` |
 | `max_rows_per_batch` | Record da elaborare per batch (ridurre in caso di problemi) | `5000` |
 
@@ -356,8 +342,6 @@ Qualsiasi strategia può essere eseguita in **modalità anteprima** prima dell'a
 ---
 
 ## Backup
-
-Se `backup_before_purge: true`, prima di ogni operazione distruttiva viene creato automaticamente un backup del database nella cartella `/backup/histolite_backup_YYYYMMDD_HHMMSS.db`.
 
 ---
 
