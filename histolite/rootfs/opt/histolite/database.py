@@ -859,6 +859,8 @@ class HaDatabase:
             if updates:
                 try:
                     conn.executemany("UPDATE states SET state = ? WHERE state_id = ?", updates)
+                    conn.commit()
+                    logger.info(f"[FlattenProgress] entity={entity_id} updated={len(updates)} values con media")
                 except Exception as e:
                     logger.warning(f"Errore executemany aggiornamento stato: {e}")
 
