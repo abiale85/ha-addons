@@ -811,8 +811,11 @@ class HaDatabase:
 
             count_query = f"SELECT COUNT(*) AS c FROM states WHERE {where_clause}"
             
-            # Media pesata nel tempo: ogni valore è ponderato per la durata in cui è rimasto valido
-            # (tempo fino al record successivo oppure 1 secondo se è l'ultimo)
+            # Media pesata nel tempo mantenendo i 2 punti agli estremi (primo e ultimo)
+            # - Il PRIMO record (più vecchio) del bucket viene aggiornato con la media pesata
+            # - L'ULTIMO record (più nuovo) rimane invariato e serve da "ponte" per il bucket successivo
+            # - Tutti gli altri record nel mezzo vengono cancellati
+            # Questo garantisce continuità temporale tra bucket e ponderazione corretta della durata
             bucket_query = f"""
                 WITH windowed AS (
                     SELECT
@@ -824,7 +827,12 @@ class HaDatabase:
                         LEAD(last_updated_ts) OVER (
                             PARTITION BY {bucket_expr}
                             ORDER BY last_updated_ts ASC, state_id ASC
-                        ) AS next_ts
+                        ) AS next_ts,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY {bucket_expr}
+                            ORDER BY last_updated_ts ASC, state_id ASC
+                        ) AS rn,
+                        COUNT(*) OVER (PARTITION BY {bucket_expr}) AS cnt
                     FROM states
                     WHERE {where_clause}
                 ),
@@ -834,6 +842,8 @@ class HaDatabase:
                         state_id,
                         state,
                         numeric_value,
+                        rn,
+                        cnt,
                         COALESCE(next_ts - last_updated_ts, 1) AS duration_sec,
                         CASE
                             WHEN state NOT IN ('unknown','unavailable','')
@@ -845,12 +855,8 @@ class HaDatabase:
                 )
                 SELECT
                     bucket,
-                    MIN(CASE 
-                        WHEN state NOT IN ('unknown','unavailable','')
-                             AND numeric_value IS NOT NULL
-                        THEN state_id
-                        ELSE NULL
-                    END) AS keep_id,
+                    MIN(CASE WHEN rn = 1 THEN state_id ELSE NULL END) AS keep_id_first,
+                    MAX(CASE WHEN rn = cnt THEN state_id ELSE NULL END) AS keep_id_last,
                     COUNT(*) AS bucket_count,
                     CASE 
                         WHEN SUM(CASE 
@@ -880,7 +886,8 @@ class HaDatabase:
             b_qid = self._log_query_start(bucket_query, base_params)
             buckets = conn.execute(bucket_query, base_params).fetchall()
             self._log_query(bucket_query, time.time() - t1, b_qid)
-            estimated_deleted = sum(b["bucket_count"] - 1 for b in buckets)
+            # Manteniamo 2 record per bucket (primo e ultimo), quindi eliminiamo count-2
+            estimated_deleted = sum(max(0, b["bucket_count"] - 2) for b in buckets)
 
             if dry_run:
                 return {
@@ -895,18 +902,26 @@ class HaDatabase:
             all_rows = conn.execute(f"SELECT state_id FROM states WHERE {where_clause}", base_params).fetchall()
             self._log_query("SELECT all state_ids", time.time() - t_ids, id_qid)
 
-            all_keep_ids = {b["keep_id"] for b in buckets}
+            # Mantieni il primo e l'ultimo record di ogni bucket (per continuità temporale)
+            # Aggiorna il primo record con la media pesata
+            all_keep_ids = set()
             updates = []
             for b in buckets:
-                if b["bucket_count"] > 1 and b["avg_value"] is not None:
+                if b["keep_id_first"]:
+                    all_keep_ids.add(b["keep_id_first"])
+                if b["keep_id_last"]:
+                    all_keep_ids.add(b["keep_id_last"])
+                
+                # Aggiorna SOLO il primo record del bucket con la media pesata
+                if b["bucket_count"] > 1 and b["avg_value"] is not None and b["keep_id_first"]:
                     avg_str = f"{b['avg_value']:.4f}".rstrip("0").rstrip(".")
-                    updates.append((avg_str, b["keep_id"]))
+                    updates.append((avg_str, b["keep_id_first"]))
 
             if updates:
                 try:
                     conn.executemany("UPDATE states SET state = ? WHERE state_id = ?", updates)
                     conn.commit()
-                    logger.info(f"[FlattenProgress] entity={entity_id} updated={len(updates)} values con media")
+                    logger.info(f"[FlattenProgress] entity={entity_id} updated={len(updates)} first-record values con media")
                 except Exception as e:
                     logger.warning(f"Errore executemany aggiornamento stato: {e}")
 
