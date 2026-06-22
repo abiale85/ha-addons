@@ -824,7 +824,6 @@ class HaDatabase:
                         state,
                         CAST(state AS REAL) AS numeric_value,
                         LEAD(last_updated_ts) OVER (
-                            PARTITION BY {bucket_expr}
                             ORDER BY last_updated_ts ASC, state_id ASC
                         ) AS next_ts,
                         ROW_NUMBER() OVER (
