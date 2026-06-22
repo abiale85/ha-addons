@@ -810,18 +810,64 @@ class HaDatabase:
                 base_params = (id_param,)
 
             count_query = f"SELECT COUNT(*) AS c FROM states WHERE {where_clause}"
+            
+            # Media pesata nel tempo: ogni valore è ponderato per la durata in cui è rimasto valido
+            # (tempo fino al record successivo oppure 1 secondo se è l'ultimo)
             bucket_query = f"""
+                WITH windowed AS (
+                    SELECT
+                        {bucket_expr} AS bucket,
+                        state_id,
+                        last_updated_ts,
+                        state,
+                        CAST(state AS REAL) AS numeric_value,
+                        LEAD(last_updated_ts) OVER (
+                            PARTITION BY {bucket_expr}
+                            ORDER BY last_updated_ts ASC, state_id ASC
+                        ) AS next_ts
+                    FROM states
+                    WHERE {where_clause}
+                ),
+                durations AS (
+                    SELECT
+                        bucket,
+                        state_id,
+                        state,
+                        numeric_value,
+                        COALESCE(next_ts - last_updated_ts, 1) AS duration_sec,
+                        CASE
+                            WHEN state NOT IN ('unknown','unavailable','')
+                                 AND numeric_value IS NOT NULL
+                            THEN numeric_value * COALESCE(next_ts - last_updated_ts, 1)
+                            ELSE 0
+                        END AS value_weighted
+                    FROM windowed
+                )
                 SELECT
-                    {bucket_expr} AS bucket,
-                    MIN(state_id) AS keep_id,
-                    COUNT(*) AS bucket_count,
-                    AVG(CASE
+                    bucket,
+                    MIN(CASE 
                         WHEN state NOT IN ('unknown','unavailable','')
-                             AND CAST(state AS REAL) IS NOT NULL
-                        THEN CAST(state AS REAL)
-                        ELSE NULL END) AS avg_value
-                FROM states
-                WHERE {where_clause}
+                             AND numeric_value IS NOT NULL
+                        THEN state_id
+                        ELSE NULL
+                    END) AS keep_id,
+                    COUNT(*) AS bucket_count,
+                    CASE 
+                        WHEN SUM(CASE 
+                                    WHEN state NOT IN ('unknown','unavailable','')
+                                         AND numeric_value IS NOT NULL
+                                    THEN duration_sec
+                                    ELSE 0
+                                END) > 0
+                        THEN ROUND(SUM(value_weighted) / CAST(SUM(CASE 
+                                                                    WHEN state NOT IN ('unknown','unavailable','')
+                                                                         AND numeric_value IS NOT NULL
+                                                                    THEN duration_sec
+                                                                    ELSE 0
+                                                                END) AS REAL), 4)
+                        ELSE NULL 
+                    END AS avg_value
+                FROM durations
                 GROUP BY bucket
             """
 
