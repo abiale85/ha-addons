@@ -191,6 +191,9 @@
 
 {% block scripts %}
 <script>
+// Store chart instances to allow cleanup before reuse
+const chartInstances = {};
+
 document.addEventListener('DOMContentLoaded', () => {
   loadDashboard();
 });
@@ -290,6 +293,10 @@ async function loadDashboard() {
 
 function renderBarChart(id, sensors) {
   const canvas = document.getElementById(id);
+  // Destroy existing chart instance to avoid canvas reuse error
+  if (chartInstances[id]) {
+    chartInstances[id].destroy();
+  }
   // Filtra righe con entity_id null/vuoto (possibile nel DB)
   const valid = (sensors || []).filter(s => s && s.entity_id);
   if (!valid.length) {
@@ -300,7 +307,7 @@ function renderBarChart(id, sensors) {
   const labels = valid.map(s => s.entity_id.split('.').pop());
   const values = valid.map(s => s.record_count);
   const colors = values.map((v, i) => `hsl(${200 + i * 18}, 70%, 55%)`);
-  new Chart(canvas, {
+  chartInstances[id] = new Chart(canvas, {
     type: 'bar',
     data: {
       labels,
@@ -319,9 +326,13 @@ function renderBarChart(id, sensors) {
 
 function renderTableDist(id, counts) {
   if (!counts) return;
+  // Destroy existing chart instance to avoid canvas reuse error
+  if (chartInstances[id]) {
+    chartInstances[id].destroy();
+  }
   const entries = Object.entries(counts).filter(([,v]) => v > 0);
   const colors = ['#0dcaf0','#ffc107','#20c997','#6f42c1','#fd7e14'];
-  new Chart(document.getElementById(id), {
+  chartInstances[id] = new Chart(document.getElementById(id), {
     type: 'doughnut',
     data: {
       labels: entries.map(([k]) => k),
