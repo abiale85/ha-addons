@@ -643,7 +643,8 @@ async function executeQuickStrategy() {
   try {
     const result = await apiPost('/api/execute', { strategy_type: strategy, entity_ids, params });
     if (result.started) {
-      showToast('Strategia avviata in background', 'info');
+      showToast('Strategia avviata in background, controlla i log', 'info');
+      setTimeout(() => window.location.reload(), 2000);
       return;
     }
     showToast(

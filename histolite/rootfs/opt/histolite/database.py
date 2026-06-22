@@ -823,7 +823,6 @@ class HaDatabase:
                 FROM states
                 WHERE {where_clause}
                 GROUP BY bucket
-                HAVING COUNT(*) > 1
             """
 
             t0 = time.time()
@@ -845,62 +844,50 @@ class HaDatabase:
                     "dry_run": True,
                 }
 
+            t_ids = time.time()
+            id_qid = self._log_query_start("SELECT all state_ids", base_params)
+            all_rows = conn.execute(f"SELECT state_id FROM states WHERE {where_clause}", base_params).fetchall()
+            self._log_query("SELECT all state_ids", time.time() - t_ids, id_qid)
+
+            all_keep_ids = {b["keep_id"] for b in buckets}
+            updates = []
+            for b in buckets:
+                if b["bucket_count"] > 1 and b["avg_value"] is not None:
+                    avg_str = f"{b['avg_value']:.4f}".rstrip("0").rstrip(".")
+                    updates.append((avg_str, b["keep_id"]))
+
+            if updates:
+                try:
+                    conn.executemany("UPDATE states SET state = ? WHERE state_id = ?", updates)
+                except Exception as e:
+                    logger.warning(f"Errore executemany aggiornamento stato: {e}")
+
+            to_delete_ids = [r["state_id"] for r in all_rows if r["state_id"] not in all_keep_ids]
+
             deleted = 0
             start_op = time.time()
-            for idx, bucket in enumerate(buckets, start=1):
-                keep_id = bucket["keep_id"]
-                avg_val = bucket["avg_value"]
-
-                if avg_val is not None:
-                    try:
-                        avg_str = f"{avg_val:.4f}".rstrip("0").rstrip(".")
-                        conn.execute(
-                            "UPDATE states SET state = ? WHERE state_id = ?",
-                            (avg_str, keep_id),
-                        )
-                    except Exception as e:
-                        logger.warning(f"Errore aggiornamento stato: {e}")
-
-                if schema["uses_ts"]:
-                    to_delete = conn.execute(
-                        f"SELECT state_id FROM states "
-                        f"WHERE {id_filter} AND last_updated_ts < ? "
-                        f"AND {bucket_expr} = ? AND state_id != ?",
-                        (id_param, cutoff, bucket["bucket"], keep_id),
-                    ).fetchall()
-                else:
-                    to_delete = conn.execute(
-                        f"SELECT state_id FROM states "
-                        f"WHERE {id_filter} "
-                        f"AND datetime(last_updated) < datetime('now', '-{older_than_days} days') "
-                        f"AND {bucket_expr} = ? AND state_id != ?",
-                        (id_param, bucket["bucket"], keep_id),
-                    ).fetchall()
-
-                if not to_delete:
-                    continue
-
-                id_list = [r["state_id"] for r in to_delete]
-                placeholders = ",".join("?" * len(id_list))
+            for i in range(0, len(to_delete_ids), batch_size):
+                chunk = to_delete_ids[i:i+batch_size]
+                ph = ",".join("?" * len(chunk))
+                
                 t_batch = time.time()
-                fb_qid = self._log_query_start(f"flatten batch ({len(id_list)})", id_list)
+                fb_qid = self._log_query_start(f"flatten batch ({len(chunk)})", chunk)
                 conn.execute(
-                    f"UPDATE states SET old_state_id = NULL "
-                    f"WHERE old_state_id IN ({placeholders})",
-                    id_list,
+                    f"UPDATE states SET old_state_id = NULL WHERE old_state_id IN ({ph})",
+                    chunk,
                 )
                 conn.execute(
-                    f"DELETE FROM states WHERE state_id IN ({placeholders})", id_list
+                    f"DELETE FROM states WHERE state_id IN ({ph})", chunk
                 )
                 conn.commit()
-                self._log_query(f"flatten batch ({len(id_list)})", time.time() - t_batch, fb_qid)
-                deleted += len(id_list)
+                self._log_query(f"flatten batch ({len(chunk)})", time.time() - t_batch, fb_qid)
+                
+                deleted += len(chunk)
                 elapsed = time.time() - start_op
-                logger.info(f"[FlattenProgress] entity={entity_id} bucket={idx}/{len(buckets)} deleted_total={deleted} elapsed_s={elapsed:.2f}")
-                # Riposo per non bloccare il database principale di HA
+                logger.info(f"[FlattenProgress] entity={entity_id} deleted_total={deleted}/{len(to_delete_ids)} elapsed_s={elapsed:.2f}")
+                
                 import time as _sys_time
-                if idx % 10 == 0:
-                    _sys_time.sleep(0.2)
+                _sys_time.sleep(0.5)
 
             conn.commit()
             return {
@@ -1002,7 +989,7 @@ class HaDatabase:
                         ) AS rn
                     FROM states
                     WHERE {where_clause}
-                ) t WHERE rn = 1 AND bucket_count > 1
+                ) t WHERE rn = 1
             """
             t1 = time.time()
             bq_id = self._log_query_start(bucket_query, base_params)
@@ -1053,50 +1040,38 @@ class HaDatabase:
                 }
 
             # ── Fase 3: elimina in batch tutto tranne all_keep_ids ───────
+            # Query all state_ids to find which ones to delete
+            t_ids = time.time()
+            id_qid = self._log_query_start("SELECT all state_ids", base_params)
+            all_ids_rows = conn.execute(f"SELECT state_id FROM states WHERE {where_clause}", base_params).fetchall()
+            self._log_query("SELECT all state_ids", time.time() - t_ids, id_qid)
+            
+            to_delete_ids = [r["state_id"] for r in all_ids_rows if r["state_id"] not in all_keep_ids]
+
             deleted = 0
             start_op = time.time()
-            while True:
-                if schema["uses_ts"]:
-                    to_del = conn.execute(
-                        f"SELECT state_id FROM states "
-                        f"WHERE {id_filter} AND last_updated_ts < ? "
-                        f"LIMIT ?",
-                        (id_param, cutoff, batch_size * 2),
-                    ).fetchall()
-                else:
-                    to_del = conn.execute(
-                        f"SELECT state_id FROM states "
-                        f"WHERE {id_filter} "
-                        f"AND datetime(last_updated) < datetime('now', '-{older_than_days} days') "
-                        f"LIMIT ?",
-                        (id_param, batch_size * 2),
-                    ).fetchall()
-
-                batch_ids = [r["state_id"] for r in to_del if r["state_id"] not in all_keep_ids]
-                if not batch_ids:
-                    break
-
-                batch_chunk = batch_ids[:batch_size]
-                ph = ",".join("?" * len(batch_chunk))
+            for i in range(0, len(to_delete_ids), batch_size):
+                chunk = to_delete_ids[i:i+batch_size]
+                ph = ",".join("?" * len(chunk))
+                
                 t_b = time.time()
-                pb_qid = self._log_query_start(f"peak_decimate batch ({len(batch_chunk)})", batch_chunk)
+                pb_qid = self._log_query_start(f"peak_decimate batch ({len(chunk)})", chunk)
                 conn.execute(
-                    f"UPDATE states SET old_state_id = NULL "
-                    f"WHERE old_state_id IN ({ph})", batch_chunk
+                    f"UPDATE states SET old_state_id = NULL WHERE old_state_id IN ({ph})",
+                    chunk,
                 )
-                conn.execute(f"DELETE FROM states WHERE state_id IN ({ph})", batch_chunk)
+                conn.execute(
+                    f"DELETE FROM states WHERE state_id IN ({ph})", chunk
+                )
                 conn.commit()
-                self._log_query(f"peak_decimate batch ({len(batch_chunk)})", time.time() - t_b, pb_qid)
-                deleted += len(batch_chunk)
+                self._log_query(f"peak_decimate batch ({len(chunk)})", time.time() - t_b, pb_qid)
+                
+                deleted += len(chunk)
                 elapsed = time.time() - start_op
-                logger.info(f"[PeakDecimateProgress] entity={entity_id} deleted_total={deleted} estimated={estimated_deleted} elapsed_s={elapsed:.2f}")
-                # Riposo per non bloccare il database principale di HA
+                logger.info(f"[PeakDecimateProgress] entity={entity_id} deleted_total={deleted}/{len(to_delete_ids)} elapsed_s={elapsed:.2f}")
+                
                 import time as _sys_time
                 _sys_time.sleep(0.5)
-
-                # Se il batch processato era < batch_size abbiamo finito
-                if len(batch_ids) < batch_size:
-                    break
 
             return {
                 "total_records": total_records,

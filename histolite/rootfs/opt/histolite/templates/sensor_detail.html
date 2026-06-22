@@ -479,7 +479,8 @@ async function detailExecute() {
       strategy_type: strategy, entity_ids: [ENTITY_ID], params
     });
     if (result.started) {
-      showToast('Strategia avviata in background', 'info');
+      showToast('Strategia avviata in background, controlla i log', 'info');
+      setTimeout(() => window.location.reload(), 2000);
       return;
     }
     showToast(
