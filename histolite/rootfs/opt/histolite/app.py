@@ -133,27 +133,39 @@ def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
         )
         result["duration_sec"] = round(time.time() - start, 2)
         now_iso = datetime.now().isoformat(timespec="seconds")
-        config_manager.save_job(
-            result, saved["strategy_type"],
-            saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
-        )
-        config_manager.update_strategy_last_run(saved["id"], now_iso)
+        try:
+            config_manager.save_job(
+                result, saved["strategy_type"],
+                saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
+            )
+        except Exception as save_err:
+            logger.error(f"[Scheduler] Errore salvataggio job per '{name}': {save_err}", exc_info=True)
+            raise
+        try:
+            config_manager.update_strategy_last_run(saved["id"], now_iso)
+        except Exception as upd_err:
+            logger.error(f"[Scheduler] Errore aggiornamento last_run per '{name}': {upd_err}", exc_info=True)
+            raise
         logger.info(f"[Scheduler] Completata '{name}' in {result['duration_sec']}s")
         return result
     except Exception as e:
-        logger.error(f"[Scheduler] Errore esecuzione '{name}': {e}")
+        logger.error(f"[Scheduler] Errore esecuzione '{name}': {e}", exc_info=True)
         now_iso = datetime.now().isoformat(timespec="seconds")
-        config_manager.update_strategy_last_run(saved["id"], now_iso)
-        config_manager.save_job(
-            {"error": str(e)}, saved["strategy_type"],
-            saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
-        )
-        raise
+        try:
+            config_manager.update_strategy_last_run(saved["id"], now_iso)
+        except Exception as upd_err:
+            logger.error(f"[Scheduler] Errore aggiornamento last_run nell'exception handler per '{name}': {upd_err}", exc_info=True)
+        try:
+            config_manager.save_job(
+                {"error": str(e)}, saved["strategy_type"],
+                saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
+            )
+        except Exception as save_err:
+            logger.error(f"[Scheduler] Errore salvataggio error job per '{name}': {save_err}", exc_info=True)
     finally:
         # Pulisci stato di esecuzione
         with _running_strategy_lock:
             _running_strategy = None
-    return result
 
 
 def _run_ad_hoc_strategy_safe(strategy_type: str, entity_ids: list[str], params: dict) -> dict:
@@ -180,13 +192,19 @@ def _run_ad_hoc_strategy_safe(strategy_type: str, entity_ids: list[str], params:
             cancel_event=_cancel_strategy_event,
         )
         result["duration_sec"] = round(time.time() - start, 2)
-        config_manager.save_job(result, strategy_type, entity_ids, params, dry_run=False)
+        try:
+            config_manager.save_job(result, strategy_type, entity_ids, params, dry_run=False)
+        except Exception as save_err:
+            logger.error(f"[Scheduler] Errore salvataggio job ad hoc '{strategy_type}': {save_err}", exc_info=True)
+            raise
         logger.info(f"[Scheduler] Completata esecuzione ad hoc '{strategy_type}' in {result['duration_sec']}s")
         return result
     except Exception as e:
-        logger.error(f"[Scheduler] Errore esecuzione ad hoc '{strategy_type}': {e}")
-        config_manager.save_job({"error": str(e)}, strategy_type, entity_ids, params, dry_run=False)
-        raise
+        logger.error(f"[Scheduler] Errore esecuzione ad hoc '{strategy_type}': {e}", exc_info=True)
+        try:
+            config_manager.save_job({"error": str(e)}, strategy_type, entity_ids, params, dry_run=False)
+        except Exception as save_err:
+            logger.error(f"[Scheduler] Errore salvataggio error job ad hoc '{strategy_type}': {save_err}", exc_info=True)
     finally:
         with _running_strategy_lock:
             _running_strategy = None
@@ -197,6 +215,9 @@ def _start_strategy_worker(target, lock_label: str) -> None:
     def _wrapper():
         try:
             target()
+        except Exception as e:
+            # Log dell'eccezione non gestita per evitare crash silenzioso
+            logger.error(f"[Worker {lock_label}] Eccezione non gestita nel thread: {e}", exc_info=True)
         finally:
             _strategy_lock.release()
 
