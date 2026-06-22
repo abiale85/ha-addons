@@ -811,11 +811,10 @@ class HaDatabase:
 
             count_query = f"SELECT COUNT(*) AS c FROM states WHERE {where_clause}"
             
-            # Media pesata nel tempo mantenendo i 2 punti agli estremi (primo e ultimo)
+            # Media pesata nel tempo, mantenendo 1 solo record per bucket
             # - Il PRIMO record (più vecchio) del bucket viene aggiornato con la media pesata
-            # - L'ULTIMO record (più nuovo) rimane invariato e serve da "ponte" per il bucket successivo
-            # - Tutti gli altri record nel mezzo vengono cancellati
-            # Questo garantisce continuità temporale tra bucket e ponderazione corretta della durata
+            # - Tutti gli altri record nel mezzo e alla fine vengono cancellati
+            # - Questo raggiunge uno stato stabile: a regime rimane 1 record/ora
             bucket_query = f"""
                 WITH windowed AS (
                     SELECT
@@ -856,7 +855,6 @@ class HaDatabase:
                 SELECT
                     bucket,
                     MIN(CASE WHEN rn = 1 THEN state_id ELSE NULL END) AS keep_id_first,
-                    MAX(CASE WHEN rn = cnt THEN state_id ELSE NULL END) AS keep_id_last,
                     COUNT(*) AS bucket_count,
                     CASE 
                         WHEN SUM(CASE 
@@ -878,16 +876,16 @@ class HaDatabase:
             """
 
             t0 = time.time()
-            c_qid = self._log_query_start(count_query, base_params)
-            count_row = conn.execute(count_query, base_params).fetchone()
+            c_qid = self._log_query_start(count_query, base_params[:2])
+            count_row = conn.execute(count_query, base_params[:2]).fetchone()
             self._log_query(count_query, time.time() - t0, c_qid)
             total_records = count_row["c"] if count_row else 0
             t1 = time.time()
             b_qid = self._log_query_start(bucket_query, base_params)
             buckets = conn.execute(bucket_query, base_params).fetchall()
             self._log_query(bucket_query, time.time() - t1, b_qid)
-            # Manteniamo 2 record per bucket (primo e ultimo), quindi eliminiamo count-2
-            estimated_deleted = sum(max(0, b["bucket_count"] - 2) for b in buckets)
+            # Manteniamo 1 record per bucket, quindi eliminiamo count-1
+            estimated_deleted = sum(max(0, b["bucket_count"] - 1) for b in buckets)
 
             if dry_run:
                 return {
@@ -898,8 +896,8 @@ class HaDatabase:
                 }
 
             t_ids = time.time()
-            id_qid = self._log_query_start("SELECT all state_ids", base_params)
-            all_rows = conn.execute(f"SELECT state_id FROM states WHERE {where_clause}", base_params).fetchall()
+            id_qid = self._log_query_start("SELECT all state_ids", base_params[:2])
+            all_rows = conn.execute(f"SELECT state_id FROM states WHERE {where_clause}", base_params[:2]).fetchall()
             self._log_query("SELECT all state_ids", time.time() - t_ids, id_qid)
 
             # Mantieni il primo e l'ultimo record di ogni bucket (per continuità temporale)
@@ -909,8 +907,6 @@ class HaDatabase:
             for b in buckets:
                 if b["keep_id_first"]:
                     all_keep_ids.add(b["keep_id_first"])
-                if b["keep_id_last"]:
-                    all_keep_ids.add(b["keep_id_last"])
                 
                 # Aggiorna SOLO il primo record del bucket con la media pesata
                 if b["bucket_count"] > 1 and b["avg_value"] is not None and b["keep_id_first"]:
