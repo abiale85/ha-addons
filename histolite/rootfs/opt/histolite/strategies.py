@@ -201,16 +201,30 @@ class RollingAverage(Strategy):
             if cancel_event and cancel_event.is_set():
                 logger.info(f"[RollingAverage] Cancellazione richiesta, interrotto a {eid}")
                 break
+            logger.debug(f"[RollingAverage] Inizio elaborazione {eid}")
             try:
                 def _op(_attempt: int):
+                    logger.debug(f"[RollingAverage] Tentativo {_attempt}/{retry_attempts} - {eid}")
                     stats = db.get_sensor_stats(eid)
-                    if stats and not stats.get("is_numeric", False):
+                    logger.debug(f"[RollingAverage] Stats per {eid}: {stats}")
+                    
+                    if not stats:
+                        logger.warning(f"[RollingAverage] {eid}: stats è None, impossibile verificare se numerico")
+                        return {
+                            "entity_id": eid,
+                            "skipped": True,
+                            "reason": "Impossibile recuperare stats - sensore potrebbe non esistere",
+                        }
+                    
+                    if not stats.get("is_numeric", False):
+                        logger.info(f"[RollingAverage] {eid}: sensore non numerico (is_numeric={stats.get('is_numeric')})")
                         return {
                             "entity_id": eid,
                             "skipped": True,
                             "reason": "Sensore non numerico - strategia inapplicabile",
                         }
 
+                    logger.debug(f"[RollingAverage] {eid}: inizio flatten_entity (older_than={older_than_days}, granularity={granularity})")
                     r = db.flatten_entity(
                         eid, older_than_days, granularity=granularity,
                         dry_run=dry_run, batch_size=batch_size
@@ -226,6 +240,7 @@ class RollingAverage(Strategy):
                     retry_delay_sec=retry_delay_sec,
                 )
                 if r.get("skipped"):
+                    logger.info(f"[RollingAverage] {eid}: skipped - {r.get('reason')}")
                     results.append(r)
                     continue
                 r["entity_id"] = eid
@@ -234,7 +249,7 @@ class RollingAverage(Strategy):
                             f"{'(DRY) ' if dry_run else ''}"
                             f"~{r.get('deleted', r.get('estimated_deleted', 0))} eliminati")
             except Exception as e:
-                logger.error(f"[RollingAverage] Errore su {eid} dopo {retry_attempts} tentativi: {e}")
+                logger.error(f"[RollingAverage] Errore su {eid} dopo {retry_attempts} tentativi: {e}", exc_info=True)
                 results.append({"entity_id": eid, "error": str(e)})
 
         total_deleted = sum(

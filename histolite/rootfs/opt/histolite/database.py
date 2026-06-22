@@ -772,9 +772,12 @@ class HaDatabase:
         Appiattisce la storia di un'entità: per ogni bucket temporale
         mantiene un solo record con la media dei valori.
         """
-        self._validate_schema_for_write()
-        schema = self.get_schema_info()
-        use_meta = self._use_meta_schema()
+        logger.debug(f"[flatten_entity] inizio: entity_id={entity_id}, older_than_days={older_than_days}, granularity={granularity}, dry_run={dry_run}")
+        try:
+            self._validate_schema_for_write()
+            schema = self.get_schema_info()
+            use_meta = self._use_meta_schema()
+            logger.debug(f"[flatten_entity] schema: uses_ts={schema.get('uses_ts')}, use_meta={use_meta}")
 
         with self._connect(read_only=dry_run) as conn:
             if use_meta:
@@ -948,13 +951,18 @@ class HaDatabase:
                 _sys_time.sleep(0.5)
 
             conn.commit()
-            return {
+            result = {
                 "total_records": total_records,
                 "buckets": len(buckets),
                 "estimated_deleted": estimated_deleted,
                 "deleted": deleted,
                 "dry_run": False,
             }
+            logger.debug(f"[flatten_entity] completato per {entity_id}: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"[flatten_entity] ERRORE per {entity_id}: {e}", exc_info=True)
+            raise
 
     def peak_decimate_entity(
         self,
