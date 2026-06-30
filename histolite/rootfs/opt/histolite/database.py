@@ -773,11 +773,10 @@ class HaDatabase:
         mantiene un solo record con la media dei valori.
         """
         logger.debug(f"[flatten_entity] inizio: entity_id={entity_id}, older_than_days={older_than_days}, granularity={granularity}, dry_run={dry_run}")
-        try:
-            self._validate_schema_for_write()
-            schema = self.get_schema_info()
-            use_meta = self._use_meta_schema()
-            logger.debug(f"[flatten_entity] schema: uses_ts={schema.get('uses_ts')}, use_meta={use_meta}")
+        self._validate_schema_for_write()
+        schema = self.get_schema_info()
+        use_meta = self._use_meta_schema()
+        logger.debug(f"[flatten_entity] schema: uses_ts={schema.get('uses_ts')}, use_meta={use_meta}")
 
         with self._connect(read_only=dry_run) as conn:
             if use_meta:
@@ -960,9 +959,6 @@ class HaDatabase:
             }
             logger.debug(f"[flatten_entity] completato per {entity_id}: {result}")
             return result
-        except Exception as e:
-            logger.error(f"[flatten_entity] ERRORE per {entity_id}: {e}", exc_info=True)
-            raise
 
     def peak_decimate_entity(
         self,
@@ -1145,6 +1141,145 @@ class HaDatabase:
                 "estimated_deleted": estimated_deleted,
                 "deleted": deleted,
                 "reset_points": len(reset_keep_ids),
+                "dry_run": False,
+            }
+
+    def deduplicate_entity(
+        self,
+        entity_id: str,
+        older_than_days: int,
+        dry_run: bool = False,
+        batch_size: int = 5000,
+    ) -> dict:
+        """
+        Elimina sequenze di valori uguali mantenendo il record più vecchio.
+        Se il valore resta identico su giorni diversi, conserva al massimo 1 record al giorno.
+        """
+        self._validate_schema_for_write()
+        schema = self.get_schema_info()
+        use_meta = self._use_meta_schema()
+
+        if schema["uses_ts"]:
+            import time as _time
+
+            ts_order_expr = "last_updated_ts"
+            day_expr = "date(datetime(last_updated_ts, 'unixepoch'))"
+            cutoff = _time.time() - older_than_days * 86400
+            where_clause = "last_updated_ts < ?"
+            base_params = (cutoff,)
+        else:
+            ts_order_expr = "datetime(last_updated)"
+            day_expr = "date(last_updated)"
+            where_clause = f"datetime(last_updated) < datetime('now', '-{older_than_days} days')"
+            base_params = ()
+
+        with self._connect(read_only=dry_run) as conn:
+            if use_meta:
+                meta_id = self._get_metadata_id(conn, entity_id)
+                if meta_id is None:
+                    return {"total_records": 0, "estimated_deleted": 0, "deleted": 0, "dry_run": dry_run}
+                id_filter = "metadata_id = ?"
+                id_param = meta_id
+            else:
+                id_filter = "entity_id = ?"
+                id_param = entity_id
+
+            full_where_clause = f"{id_filter} AND {where_clause}"
+            query_params = (id_param,) + base_params
+
+            count_query = f"""
+                WITH ordered AS (
+                    SELECT
+                        state_id,
+                        state,
+                        {ts_order_expr} AS order_ts,
+                        {day_expr} AS day_key,
+                        LAG(state) OVER (
+                            ORDER BY {ts_order_expr} ASC, state_id ASC
+                        ) AS prev_state,
+                        LAG({day_expr}) OVER (
+                            ORDER BY {ts_order_expr} ASC, state_id ASC
+                        ) AS prev_day_key
+                    FROM states
+                    WHERE {full_where_clause}
+                )
+                SELECT COUNT(*) AS c
+                FROM ordered
+                WHERE prev_state IS NOT NULL
+                  AND state = prev_state
+                  AND day_key = prev_day_key
+            """
+
+            start_t = time.time()
+            c_qid = self._log_query_start(count_query, query_params)
+            count_row = conn.execute(count_query, query_params).fetchone()
+            self._log_query(count_query, time.time() - start_t, c_qid)
+            total_to_delete = count_row["c"] if count_row else 0
+
+            if dry_run or total_to_delete == 0:
+                return {"total_records": total_to_delete, "estimated_deleted": total_to_delete, "deleted": 0, "dry_run": dry_run}
+
+            deleted = 0
+            start_op = time.time()
+            while True:
+                select_query = f"""
+                    WITH ordered AS (
+                        SELECT
+                            state_id,
+                            state,
+                            {ts_order_expr} AS order_ts,
+                            {day_expr} AS day_key,
+                            LAG(state) OVER (
+                                ORDER BY {ts_order_expr} ASC, state_id ASC
+                            ) AS prev_state,
+                            LAG({day_expr}) OVER (
+                                ORDER BY {ts_order_expr} ASC, state_id ASC
+                            ) AS prev_day_key
+                        FROM states
+                        WHERE {full_where_clause}
+                    )
+                    SELECT state_id
+                    FROM ordered
+                    WHERE prev_state IS NOT NULL
+                      AND state = prev_state
+                      AND day_key = prev_day_key
+                    ORDER BY order_ts ASC, state_id ASC
+                    LIMIT ?
+                """
+                batch_params = query_params + (batch_size,)
+                t_ids = time.time()
+                b_qid = self._log_query_start(select_query, batch_params)
+                rows = conn.execute(select_query, batch_params).fetchall()
+                self._log_query(select_query, time.time() - t_ids, b_qid)
+                if not rows:
+                    break
+
+                id_list = [r["state_id"] for r in rows]
+                placeholders = ",".join("?" * len(id_list))
+                t_batch = time.time()
+                db_qid = self._log_query_start(f"deduplicate batch ({len(id_list)})", id_list)
+                conn.execute(
+                    f"UPDATE states SET old_state_id = NULL WHERE old_state_id IN ({placeholders})",
+                    id_list,
+                )
+                conn.execute(
+                    f"DELETE FROM states WHERE state_id IN ({placeholders})",
+                    id_list,
+                )
+                conn.commit()
+                self._log_query(f"deduplicate batch ({len(id_list)})", time.time() - t_batch, db_qid)
+
+                deleted += len(id_list)
+                elapsed = time.time() - start_op
+                logger.info(f"[DeduplicateProgress] entity={entity_id} deleted={deleted}/{total_to_delete} elapsed_s={elapsed:.2f}")
+
+                import time as _sys_time
+                _sys_time.sleep(0.5)
+
+            return {
+                "total_records": total_to_delete,
+                "estimated_deleted": total_to_delete,
+                "deleted": deleted,
                 "dry_run": False,
             }
 

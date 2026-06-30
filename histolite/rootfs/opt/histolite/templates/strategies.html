@@ -25,7 +25,12 @@
             <div id="acc-{{ s.name }}" class="accordion-collapse collapse"
                  data-bs-parent="#strategyAccordion">
               <div class="accordion-body pt-0">
-                <p class="text-muted small">{{ s.description }}</p>
+                <p class="text-muted small mb-2">{{ s.description }}</p>
+                {% if s.example %}
+                <div class="small text-secondary mb-3">
+                  <strong>Esempio:</strong> {{ s.example }}
+                </div>
+                {% endif %}
                 <button class="btn btn-sm btn-outline-primary js-prefill-strategy"
                   data-strategy-name="{{ s.name }}">
                   <i class="bi bi-plus me-1"></i>Crea strategia
@@ -167,6 +172,23 @@
                   <div class="input-group input-group-sm">
                     <input type="number" class="form-control" id="fp-peak-threshold" value="50" min="5" max="99" step="5">
                     <span class="input-group-text">%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- Params deduplica valori -->
+            <div id="fp-dedup" class="form-params d-none">
+              <div class="row g-2">
+                <div class="col-8">
+                  <label class="form-label small">Applica a dati più vecchi di</label>
+                  <div class="input-group input-group-sm">
+                    <input type="number" class="form-control" id="fp-dedup-days" value="7" min="1">
+                    <span class="input-group-text">giorni</span>
+                  </div>
+                </div>
+                <div class="col-12">
+                  <div class="small text-muted">
+                    Mantiene il record più vecchio di una sequenza identica e, se il valore continua per più giorni, al massimo uno al giorno.
                   </div>
                 </div>
               </div>
@@ -415,6 +437,7 @@ function updateFormParams() {
     rolling_average: 'fp-rolling',
     adaptive_purge: 'fp-adaptive',
     peak_decimation: 'fp-peak',
+    deduplicate_values: 'fp-dedup',
     outlier_purge: 'fp-outlier',
   };
   document.getElementById(map[val])?.classList.remove('d-none');
@@ -522,6 +545,8 @@ function getFormParams() {
     if (params.keep_resets) {
       params.reset_threshold_pct = parseFloat(document.getElementById('fp-peak-threshold').value) || 50;
     }
+  } else if (strategy === 'deduplicate_values') {
+    params.older_than_days = parseInt(document.getElementById('fp-dedup-days').value, 10);
   } else if (strategy === 'outlier_purge') {
     params.remove_negative = document.getElementById('fp-outlier-neg').checked;
     const minVal = document.getElementById('fp-outlier-min').value;
@@ -601,6 +626,8 @@ function editSaved(s) {
     document.getElementById('fp-peak-gran').value = p.granularity || 'hour';
     document.getElementById('fp-peak-resets').checked = p.keep_resets !== false;
     document.getElementById('fp-peak-threshold').value = p.reset_threshold_pct || 50;
+  } else if (s.strategy_type === 'deduplicate_values') {
+    document.getElementById('fp-dedup-days').value = p.older_than_days || 7;
   } else if (s.strategy_type === 'outlier_purge') {
     document.getElementById('fp-outlier-neg').checked = p.remove_negative !== false;
     document.getElementById('fp-outlier-min').value = p.min_value ?? '';

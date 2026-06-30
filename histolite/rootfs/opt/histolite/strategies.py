@@ -1,6 +1,6 @@
 """
 HistoLite - Strategie di ottimizzazione
-Definizione ed esecuzione delle 4 strategie disponibili.
+Definizione ed esecuzione delle 7 strategie disponibili.
 """
 
 import logging
@@ -544,6 +544,69 @@ class PeakDecimation(Strategy):
 
 
 # ---------------------------------------------------------------------------
+# Strategia 7 - Deduplica Sequenziale
+# ---------------------------------------------------------------------------
+
+class DeduplicateValues(Strategy):
+    """
+    Elimina sequenze di valori uguali mantenendo il record più vecchio.
+    Se il valore resta identico su giorni diversi, conserva al massimo 1 record al giorno.
+    Funziona sia per stati testuali sia per numeri salvati come stringhe.
+    """
+    name = "deduplicate_values"
+    label = "Deduplica Valori"
+    description = (
+        "Rimuove duplicati consecutivi dello stesso valore, mantenendo il record più vecchio. "
+        "Se il valore non cambia per più giorni, lascia al massimo un record al giorno."
+    )
+
+    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
+        older_than_days = int(params.get("older_than_days", 7))
+        retry_attempts = int(params.get("retry_attempts", 2))
+        retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
+        results = []
+
+        for eid in entity_ids:
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"[DeduplicateValues] Cancellazione richiesta, interrotto a {eid}")
+                break
+            try:
+                raw_result = _run_with_retry(
+                    "DeduplicateValues",
+                    eid,
+                    lambda attempt: db.deduplicate_entity(
+                        eid,
+                        older_than_days,
+                        dry_run=dry_run,
+                        batch_size=batch_size,
+                    ),
+                    retry_attempts=retry_attempts,
+                    retry_delay_sec=retry_delay_sec,
+                )
+                r = raw_result if isinstance(raw_result, dict) else {}
+                r["entity_id"] = eid
+                results.append(r)
+                logger.info(
+                    f"[DeduplicateValues] {eid}: "
+                    f"{'(DRY) ' if dry_run else ''}"
+                    f"~{r.get('deleted', r.get('estimated_deleted', 0))} record duplicati"
+                )
+            except Exception as e:
+                logger.error(f"[DeduplicateValues] Errore su {eid} dopo {retry_attempts} tentativi: {e}")
+                results.append({"entity_id": eid, "error": str(e)})
+
+        total_deleted = sum(r.get("deleted", r.get("estimated_deleted", 0)) for r in results)
+        return {
+            "strategy": self.name,
+            "dry_run": dry_run,
+            "params": params,
+            "entity_count": len(entity_ids),
+            "total_deleted": total_deleted,
+            "details": results,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Registry e factory
 # ---------------------------------------------------------------------------
 
@@ -554,6 +617,7 @@ STRATEGY_REGISTRY = {
     AdaptivePurge.name: AdaptivePurge,
     OutlierPurge.name: OutlierPurge,
     PeakDecimation.name: PeakDecimation,
+    DeduplicateValues.name: DeduplicateValues,
 }
 
 STRATEGY_LIST = [
@@ -561,6 +625,7 @@ STRATEGY_LIST = [
         "name": SimplePurge.name,
         "label": SimplePurge.label,
         "description": SimplePurge.description,
+        "example": "Se un sensore registra ogni minuto, elimina tutto cio' che e' piu' vecchio della soglia senza guardare il valore.",
         "params": [
             {"key": "older_than_days", "label": "Elimina record più vecchi di (giorni)",
              "type": "number", "default": 30, "min": 1},
@@ -570,6 +635,7 @@ STRATEGY_LIST = [
         "name": TemporalDecimation.name,
         "label": TemporalDecimation.label,
         "description": TemporalDecimation.description,
+        "example": "Se hai 1.000 letture distribuite in un giorno, ne lascia poche per fascia oraria e poi una al giorno, anche se i valori cambiano.",
         "params": [
             {"key": "older_than_days", "label": "Soglia appiattimento orario (giorni)",
              "type": "number", "default": 14, "min": 1},
@@ -579,6 +645,7 @@ STRATEGY_LIST = [
         "name": RollingAverage.name,
         "label": RollingAverage.label,
         "description": RollingAverage.description,
+        "example": "Utile su un termometro numerico: invece di tenere tutte le letture, le sostituisce con una media oraria o giornaliera.",
         "params": [
             {"key": "older_than_days", "label": "Applica media a dati più vecchi di (giorni)",
              "type": "number", "default": 7, "min": 1},
@@ -590,6 +657,7 @@ STRATEGY_LIST = [
         "name": AdaptivePurge.name,
         "label": AdaptivePurge.label,
         "description": AdaptivePurge.description,
+        "example": "Se vuoi tenere tutto all'inizio, poi ridurre a ore, poi a giorni e infine cancellare del tutto il molto vecchio.",
         "params": [
             {"key": "threshold_1_days", "label": "Appiattimento orario dopo (giorni)",
              "type": "number", "default": 7, "min": 1},
@@ -603,6 +671,7 @@ STRATEGY_LIST = [
         "name": OutlierPurge.name,
         "label": OutlierPurge.label,
         "description": OutlierPurge.description,
+        "example": "Se un sensore manda -999, unavailable o valori fuori range, li elimina senza toccare i record validi.",
         "params": [
             {"key": "remove_negative", "label": "Elimina valori negativi",
              "type": "boolean", "default": False},
@@ -620,6 +689,7 @@ STRATEGY_LIST = [
         "name": PeakDecimation.name,
         "label": PeakDecimation.label,
         "description": PeakDecimation.description,
+        "example": "Per un contatore energia conserva il valore massimo di ogni ora o giorno, invece della media, e protegge i reset.",
         "params": [
             {"key": "older_than_days", "label": "Applica a dati più vecchi di (giorni)",
              "type": "number", "default": 7, "min": 1},
@@ -629,6 +699,16 @@ STRATEGY_LIST = [
              "type": "boolean", "default": True},
             {"key": "reset_threshold_pct", "label": "Soglia reset (% calo per rilevare reset)",
              "type": "number", "default": 50.0, "min": 5, "max": 99},
+        ],
+    },
+    {
+        "name": DeduplicateValues.name,
+        "label": DeduplicateValues.label,
+        "description": DeduplicateValues.description,
+        "example": "Se un sensore continua a pubblicare 21.3 con timestamp diversi, lascia il primo record della sequenza e, se continua per giorni, al massimo uno al giorno.",
+        "params": [
+            {"key": "older_than_days", "label": "Applica a dati più vecchi di (giorni)",
+             "type": "number", "default": 7, "min": 1},
         ],
     },
 ]
