@@ -6,7 +6,7 @@ Repository di add-on personalizzati per Home Assistant.
 
 ### [HistoLite](histolite/)
 Gestione intelligente della history dei sensori Home Assistant.  
-Alleggerisce il database SQLite con 4 strategie di purge e appiattimento dei dati storici.
+Alleggerisce il database SQLite con 7 strategie di purge, appiattimento e pulizia dei dati storici.
 
 ## Installazione
 

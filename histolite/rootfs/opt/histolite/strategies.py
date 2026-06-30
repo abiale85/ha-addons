@@ -729,17 +729,56 @@ def execute_strategy(
     if not cls:
         return {"error": f"Strategia sconosciuta: {strategy_name}"}
     strategy = cls()
-    logger.info(f"[StrategyStart] name={strategy_name} entities={len(entity_ids)} dry_run={dry_run}")
+    resolved_entity_ids = entity_ids
+    unmatched_patterns: list[str] = []
+
+    resolver = getattr(db, "resolve_entity_ids", None)
+    if callable(resolver):
+        try:
+            resolved_result = resolver(entity_ids)
+            if isinstance(resolved_result, tuple) and len(resolved_result) == 2:
+                resolved_entity_ids, unmatched_patterns = resolved_result
+            else:
+                resolved_entity_ids = entity_ids
+                unmatched_patterns = []
+        except Exception as e:
+            logger.warning(f"[StrategyStart] fallback senza espansione wildcard: {e}")
+            resolved_entity_ids = entity_ids
+            unmatched_patterns = []
+
+    logger.info(
+        f"[StrategyStart] name={strategy_name} requested={len(entity_ids)} "
+        f"resolved={len(resolved_entity_ids)} dry_run={dry_run}"
+    )
+    if unmatched_patterns:
+        logger.warning(
+            f"[StrategyStart] pattern wildcard senza risultati per {strategy_name}: {unmatched_patterns}"
+        )
+
+    if not resolved_entity_ids:
+        return {
+            "error": "Nessuna entita' corrisponde ai filtri specificati",
+            "input_entity_ids": entity_ids,
+            "resolved_entity_ids": [],
+            "unmatched_entity_patterns": unmatched_patterns,
+        }
+
     t0 = time.time()
     try:
         res = strategy.execute(
-            db, entity_ids, params, dry_run=dry_run,
+            db, resolved_entity_ids, params, dry_run=dry_run,
             batch_size=batch_size, cancel_event=cancel_event,
         )
         elapsed = time.time() - t0
         # try to extract basic summary info
         total_deleted = res.get("total_deleted") if isinstance(res, dict) else None
         logger.info(f"[StrategyEnd] name={strategy_name} elapsed_s={elapsed:.2f} total_deleted={total_deleted}")
+        if isinstance(res, dict):
+            res.setdefault("input_entity_ids", entity_ids)
+            res["resolved_entity_ids"] = resolved_entity_ids
+            if unmatched_patterns:
+                res["unmatched_entity_patterns"] = unmatched_patterns
+            res["entity_count"] = len(resolved_entity_ids)
         return res
     except Exception as e:
         elapsed = time.time() - t0

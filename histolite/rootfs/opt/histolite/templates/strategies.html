@@ -72,11 +72,12 @@
             <label class="form-label">Entità selezionate</label>
             <div class="input-group">
               <input type="text" class="form-control" id="f-entity-input"
-                     placeholder="Inizia a digitare per cercare…">
+                     placeholder="Inizia a digitare per cercare o scrivi una wildcard, es. device_tracker.*">
               <button class="btn btn-outline-secondary" type="button" id="add-entity-btn">
                 <i class="bi bi-plus"></i>
               </button>
             </div>
+            <div class="form-text">Puoi aggiungere sia entita' singole sia wildcard come <code>device_tracker.*</code> o <code>sensor.casa_?</code>.</div>
             <div id="entity-tags" class="mt-2 d-flex flex-wrap gap-1"></div>
             <div id="entity-suggestions" class="list-group mt-1 position-absolute z-1 w-50 d-none"></div>
           </div>
@@ -456,6 +457,7 @@ function setupEntitySearch() {
   input.addEventListener('input', async () => {
     const q = input.value.trim().toLowerCase();
     if (q.length < 2) { suggestions.classList.add('d-none'); return; }
+    if (/[*?]/.test(q)) { suggestions.classList.add('d-none'); return; }
 
     // Carica lista sensori on-demand al primo utilizzo o cerca live
     if (sensorSearchController) sensorSearchController.abort();

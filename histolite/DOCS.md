@@ -40,8 +40,9 @@ HistoLite analizza il database SQLite di Home Assistant (`home-assistant_v2.db`)
 
 ### Strategie
 - Creazione e salvataggio di strategie con nome personalizzato
-- 5 tipologie disponibili (vedi sezione strategie)
+- 7 tipologie disponibili (vedi sezione strategie)
 - Selezione entità con autocompletamento
+- Supporto wildcard nelle entità, ad esempio `device_tracker.*` o `sensor.casa_?`
 - Esecuzione one-click delle strategie salvate
 
 ### Cronologia
@@ -80,7 +81,9 @@ Clicca **Avvia** e poi **Apri interfaccia web** (oppure accedi da Sidebar → Hi
 
 ---
 
-## Le 5 strategie
+## Le 7 strategie
+
+> Nota: puoi specificare anche wildcard nelle entità. Al momento dell'esecuzione HistoLite espande pattern come `device_tracker.*` in tutti gli entity_id corrispondenti e rimuove i duplicati.
 
 ### 1. Purge Semplice
 Elimina **tutti** i record più vecchi di N giorni per le entità selezionate.  

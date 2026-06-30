@@ -363,6 +363,70 @@ class HaDatabase:
                 logger.error(f"get_entity_list error: {e}", exc_info=True)
                 return []
 
+    def resolve_entity_ids(self, entity_ids: list[str]) -> tuple[list[str], list[str]]:
+        """Espande wildcard stile shell (* e ?) in entity_id reali.
+
+        Restituisce una coppia:
+        - lista ordinata e deduplicata degli entity_id risolti
+        - lista dei pattern wildcard che non hanno prodotto risultati
+        """
+        use_meta = self._use_meta_schema()
+        resolved: list[str] = []
+        seen: set[str] = set()
+        unmatched_patterns: list[str] = []
+
+        if use_meta:
+            query = (
+                "SELECT DISTINCT entity_id FROM states_meta "
+                "WHERE entity_id LIKE ? ESCAPE '\\' ORDER BY entity_id"
+            )
+        else:
+            query = (
+                "SELECT DISTINCT entity_id FROM states "
+                "WHERE entity_id IS NOT NULL AND entity_id != '' AND entity_id LIKE ? ESCAPE '\\' "
+                "ORDER BY entity_id"
+            )
+
+        with self._connect(read_only=True) as conn:
+            conn.execute("PRAGMA busy_timeout=5000")
+            for raw in entity_ids:
+                pattern = str(raw).strip()
+                if not pattern:
+                    continue
+
+                has_wildcard = "*" in pattern or "?" in pattern
+                if not has_wildcard:
+                    if pattern not in seen:
+                        seen.add(pattern)
+                        resolved.append(pattern)
+                    continue
+
+                like_pattern = (
+                    pattern.replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                    .replace("*", "%")
+                    .replace("?", "_")
+                )
+                try:
+                    rows = conn.execute(query, (like_pattern,)).fetchall()
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"resolve_entity_ids query error for pattern {pattern}: {e}")
+                    unmatched_patterns.append(pattern)
+                    continue
+
+                if not rows:
+                    unmatched_patterns.append(pattern)
+                    continue
+
+                for row in rows:
+                    entity_id = row["entity_id"]
+                    if entity_id not in seen:
+                        seen.add(entity_id)
+                        resolved.append(entity_id)
+
+        return resolved, unmatched_patterns
+
     def get_sensor_stats(self, entity_id: str) -> Optional[dict]:
         """Statistiche dettagliate per un singolo sensore. Timeout: 5 sec."""
         schema = self.get_schema_info()
