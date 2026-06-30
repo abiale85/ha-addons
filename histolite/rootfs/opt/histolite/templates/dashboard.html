@@ -481,8 +481,13 @@ async function refreshOverview() {
   } catch(e) {
     showToast(`Errore refresh: ${e.message}`, 'danger');
   } finally {
-    hideGlobalLoading();
-    document.getElementById('refresh-btn').disabled = false;
+    const refreshBtn = document.getElementById('refresh-btn');
+    if (refreshBtn) refreshBtn.disabled = false;
+    try {
+      hideGlobalLoading();
+    } catch (cleanupError) {
+      console.error('[HistoLite] Errore cleanup refresh:', cleanupError);
+    }
   }
 }
 </script>
