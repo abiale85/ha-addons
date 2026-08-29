@@ -187,9 +187,9 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Note tecniche
 
-- **Database**: solo SQLite (`home-assistant_v2.db`).
-- **Compatibilità schema**: gestisce sia lo schema con colonne `last_updated` (datetime, HA < 2023) che quello con `last_updated_ts` (Unix timestamp float, HA ≥ 2023.3).
-- **Concorrenza**: usa WAL mode con checkpoint automatico ogni 500 pagine. Le operazioni vengono eseguite in batch per minimizzare il lock sul DB principale di HA.
+- **Database supportati**: SQLite, PostgreSQL, MariaDB e TimescaleDB (internamente trattato come PostgreSQL).
+- **Compatibilità schema**: richiede lo schema moderno di Home Assistant, con `states_meta` e `metadata_id`, e rifiuta il supporto per i vecchi schemi legacy o in migrazione.
+- **Concorrenza**: per SQLite usa WAL mode con checkpoint automatico ogni 500 pagine; per PostgreSQL/MariaDB il backend delega la gestione delle transazioni al motore SQL.
 - **Sicurezza referenziale**: l'operazione di flatten e delete aggiorna i riferimenti `old_state_id` prima di eliminare le righe per evitare dangling references.
 
 ---

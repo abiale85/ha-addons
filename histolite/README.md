@@ -1,7 +1,7 @@
 # HistoLite — Add-on Home Assistant
 
 Gestione intelligente della history dei sensori Home Assistant.  
-Analizza il database SQLite, mostra statistiche di utilizzo e permette di applicare strategie mirate di purge e appiattimento dei dati storici.
+Supporta SQLite, PostgreSQL, MariaDB e TimescaleDB (via PostgreSQL), controlla automaticamente lo schema moderno di Home Assistant e blocca l'avvio se trova un backend o una struttura legacy non supportata.
 
 ## Caratteristiche principali
 
@@ -11,7 +11,7 @@ Analizza il database SQLite, mostra statistiche di utilizzo e permette di applic
 - **Backup automatico** del database prima di modifiche
 - **Interfaccia completamente italiana** accessibile via HA Ingress
 - **Cronologia** completa di tutte le operazioni eseguite
-- Compatibile con lo schema HA 2021→2024+
+- Richiede lo schema moderno di Home Assistant (`states_meta` + `metadata_id`)
 
 ## Documentazione
 

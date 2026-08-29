@@ -3,3 +3,5 @@ flask-cors>=4.0.0
 apscheduler>=3.10.4
 werkzeug>=3.0.0
 gunicorn>=21.2.0
+psycopg[binary]>=3.2.0,<4
+mysql-connector-python>=9.0.0,<10

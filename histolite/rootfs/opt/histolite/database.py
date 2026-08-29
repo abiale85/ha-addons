@@ -10,8 +10,14 @@ import json
 import time
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+class UnsupportedDatabaseError(RuntimeError):
+    """Sollevata quando il backend configurato non è supportato."""
+    pass
 
 
 class SchemaUnrecognizedError(RuntimeError):
@@ -23,105 +29,241 @@ class SchemaUnrecognizedError(RuntimeError):
 class HaDatabase:
     """Gestisce la connessione e le operazioni sul database HA."""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, db_type: str = "sqlite", db_url: Optional[str] = None):
         self.db_path = db_path
+        self.db_type = (db_type or "sqlite").lower()
+        if self.db_type == "timescaledb":
+            self.db_type = "postgresql"
+        self.db_url = db_url
         self._schema = None
         # helper for query instrumentation
         self._query_counter = 0
 
-    # ------------------------------------------------------------------
-    # Connessioni
-    # ------------------------------------------------------------------
-
-    def _connect(self, read_only: bool = False) -> sqlite3.Connection:
+    def _build_sqlite_uri(self, read_only: bool = False) -> str:
         if not os.path.exists(self.db_path):
             raise FileNotFoundError(f"Database non trovato: {self.db_path}")
-        if read_only:
-            uri = f"file:{self.db_path}?mode=ro"
-        else:
-            uri = f"file:{self.db_path}"
-        conn = sqlite3.connect(uri, uri=True, timeout=30, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        # Limita cache SQLite: 512 pagine × 4KB = 2MB massimo per connessione
-        conn.execute("PRAGMA cache_size = -512")
-        # Nessuna memory-mapped I/O (riduce RSS in modo significativo)
-        conn.execute("PRAGMA mmap_size = 0")
-        # Temp store su file invece che in RAM
-        conn.execute("PRAGMA temp_store = FILE")
-        if not read_only:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            # WAL checkpoint automatico ogni 500 pagine (evita crescita illimitata)
-            conn.execute("PRAGMA wal_autocheckpoint = 500")
-            try:
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_id ON states(entity_id)")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_last_updated_ts ON states(last_updated_ts) WHERE last_updated_ts IS NOT NULL")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_last_updated ON states(last_updated) WHERE last_updated IS NOT NULL")
-            except Exception as e:
-                logger.debug(f"Index creation: {e}")
-            try:
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_states_meta_entity_id ON states_meta(entity_id)")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_states_metadata_id ON states(metadata_id) WHERE metadata_id IS NOT NULL")
-            except Exception as e:
-                logger.debug(f"states_meta index creation: {e}")
+        return f"file:{self.db_path}?mode=ro" if read_only else f"file:{self.db_path}"
+
+    def _connect_postgresql(self, read_only: bool = False):
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise UnsupportedDatabaseError(
+                "Supporto PostgreSQL richiesto ma il driver psycopg non è installato. "
+                "Installa le dipendenze dell'add-on o usa SQLite."
+            ) from exc
+        connection_str = self.db_url or os.environ.get("DB_URL")
+        if not connection_str:
+            raise UnsupportedDatabaseError(
+                "Per PostgreSQL è richiesta la variabile DB_URL o la voce di configurazione db_url."
+            )
+        conn = psycopg.connect(connection_str, connect_timeout=30, sslmode="prefer")
+        conn.autocommit = False if not read_only else True
         return conn
+
+    def _connect_mariadb(self, read_only: bool = False):
+        try:
+            import mysql.connector
+        except ImportError as exc:
+            raise UnsupportedDatabaseError(
+                "Supporto MariaDB richiesto ma il driver mysql-connector-python non è installato."
+            ) from exc
+        connection_cfg = self._mysql_connection_config()
+        conn = mysql.connector.connect(**connection_cfg, autocommit=read_only)
+        return conn
+
+    def _mysql_connection_config(self) -> dict:
+        if self.db_url:
+            parsed = urlparse(self.db_url)
+            if parsed.scheme in {"mysql", "mariadb"}:
+                return {
+                    "host": parsed.hostname or "127.0.0.1",
+                    "port": parsed.port or 3306,
+                    "user": parsed.username or "",
+                    "password": parsed.password or "",
+                    "database": parsed.path.lstrip("/") if parsed.path else "",
+                    "autocommit": False,
+                }
+        host = os.environ.get("DB_HOST")
+        port = int(os.environ.get("DB_PORT", "3306"))
+        user = os.environ.get("DB_USER")
+        password = os.environ.get("DB_PASSWORD")
+        database = os.environ.get("DB_NAME")
+        if not all([host, user, database]):
+            raise UnsupportedDatabaseError(
+                "Per MariaDB sono richiesti DB_HOST, DB_USER e DB_NAME."
+            )
+        return {
+            "host": host,
+            "port": port,
+            "user": user,
+            "password": password or "",
+            "database": database,
+            "autocommit": False,
+        }
+
+    def _get_column_names_from_cursor(self, cursor) -> set[str]:
+        try:
+            rows = cursor.fetchall()
+        except Exception:
+            return set()
+        names = set()
+        for row in rows:
+            if isinstance(row, dict):
+                key = row.get("column_name") or row.get("COLUMN_NAME") or row.get("name")
+            elif isinstance(row, tuple):
+                key = row[0]
+            else:
+                key = str(row)
+            if key:
+                names.add(key)
+        return names
+
+    def _table_exists(self, conn, table_name: str) -> bool:
+        if self.db_type == "sqlite":
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,),
+            ).fetchone()
+            return row is not None
+        if self.db_type == "postgresql":
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = %s",
+                (table_name,),
+            )
+            return cur.fetchone() is not None
+        if self.db_type == "mariadb":
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = %s LIMIT 1",
+                (table_name,),
+            )
+            return cur.fetchone() is not None
+        return False
+
+    def _connect(self, read_only: bool = False):
+        if self.db_type == "sqlite":
+            if not os.path.exists(self.db_path):
+                raise FileNotFoundError(f"Database non trovato: {self.db_path}")
+            if read_only:
+                uri = f"file:{self.db_path}?mode=ro"
+            else:
+                uri = f"file:{self.db_path}"
+            conn = sqlite3.connect(uri, uri=True, timeout=30, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA cache_size = -512")
+            conn.execute("PRAGMA mmap_size = 0")
+            conn.execute("PRAGMA temp_store = FILE")
+            if not read_only:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA wal_autocheckpoint = 500")
+                try:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_entity_id ON states(entity_id)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_last_updated_ts ON states(last_updated_ts) WHERE last_updated_ts IS NOT NULL")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_last_updated ON states(last_updated) WHERE last_updated IS NOT NULL")
+                except Exception as e:
+                    logger.debug(f"Index creation: {e}")
+                try:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_states_meta_entity_id ON states_meta(entity_id)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_states_metadata_id ON states(metadata_id) WHERE metadata_id IS NOT NULL")
+                except Exception as e:
+                    logger.debug(f"states_meta index creation: {e}")
+            return conn
+        if self.db_type == "postgresql":
+            return self._connect_postgresql(read_only=read_only)
+        if self.db_type == "mariadb":
+            return self._connect_mariadb(read_only=read_only)
+        raise UnsupportedDatabaseError(
+            f"Backend '{self.db_type}' non supportato. Supportati: sqlite, postgresql, mariadb."
+        )
+
+    def validate_supported_backend_and_schema(self) -> dict:
+        """Falla l'avvio se il backend o lo schema del DB non sono supportati."""
+        schema = self.get_schema_info()
+        if self.db_type not in {"sqlite", "postgresql", "mariadb"}:
+            raise UnsupportedDatabaseError(f"Backend non supportato: {self.db_type}")
+        if schema.get("schema_type") != "modern":
+            raise SchemaUnrecognizedError(
+                "Schema Home Assistant non supportato: HistoLite supporta solo lo schema moderno con "
+                "states_meta + metadata_id. Lo schema legacy o in transizione non è supportato."
+            )
+        return schema
 
     def get_schema_info(self) -> dict:
         """Rileva la versione dello schema del database HA.
 
         schema_type:
-          'legacy'       - entity_id direttamente in states (HA < recorder 23)
-          'modern'       - entity_id in states_meta via metadata_id (HA >= recorder 23)
-          'transitional' - entrambe le colonne presenti (migrazione in corso), trattato come legacy
-          'unknown'      - schema non riconosciuto: nessuna operazione di scrittura consentita
+          'modern'       - supportato
+          'unsupported_legacy' - schema HA legacy, non supportato
+          'unsupported_transitional' - schema in migrazione, non supportato
+          'unsupported_unknown' - schema non riconoscibile, non supportato
         """
         if self._schema:
             return self._schema
         with self._connect(read_only=True) as conn:
-            cur = conn.execute("PRAGMA table_info(states)")
-            cols = {row["name"] for row in cur.fetchall()}
+            if self.db_type == "sqlite":
+                cur = conn.execute("PRAGMA table_info(states)")
+                cols = {row["name"] for row in cur.fetchall()}
+            else:
+                if self.db_type == "postgresql":
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'states' ORDER BY ordinal_position"
+                    )
+                else:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'states' ORDER BY ordinal_position"
+                    )
+                cols = self._get_column_names_from_cursor(cur)
             uses_ts = "last_updated_ts" in cols
-            has_attributes_id = "attributes_id" in cols
             has_metadata = "metadata_id" in cols
             has_entity_id_in_states = "entity_id" in cols
+            has_states_meta = self._table_exists(conn, "states_meta")
 
-            # Determina il tipo di schema
             if has_entity_id_in_states and not has_metadata:
-                schema_type = "legacy"
+                schema_type = "unsupported_legacy"
             elif has_metadata and not has_entity_id_in_states:
-                # Verifica che states_meta esista davvero
-                try:
-                    sm = conn.execute(
-                        "SELECT name FROM sqlite_master "
-                        "WHERE type='table' AND name='states_meta'"
-                    ).fetchone()
-                    schema_type = "modern" if sm else "unknown"
-                except Exception:
-                    schema_type = "unknown"
+                schema_type = "modern" if has_states_meta else "unsupported_unknown"
             elif has_entity_id_in_states and has_metadata:
-                # Migrazione in corso: entrambe le colonne presenti
-                schema_type = "transitional"   # trattato come legacy in _use_meta_schema
+                schema_type = "unsupported_transitional"
             else:
-                # Nessuna delle due → schema non riconosciuto
-                schema_type = "unknown"
+                schema_type = "unsupported_unknown"
 
-            if schema_type == "unknown":
+            if schema_type in {"unsupported_legacy", "unsupported_transitional", "unsupported_unknown"}:
                 logger.error(
-                    f"Schema del database non riconosciuto! "
+                    "Schema del database non supportato! "
                     f"Colonne states: {sorted(cols)}. "
-                    f"Operazioni di scrittura bloccate."
+                    "HistoLite supporta solo lo schema moderno di Home Assistant."
                 )
 
             self._schema = {
                 "uses_ts": uses_ts,
-                "has_attributes_id": has_attributes_id,
                 "has_metadata": has_metadata,
                 "has_entity_id_in_states": has_entity_id_in_states,
                 "schema_type": schema_type,
                 "timestamp_col": "last_updated_ts" if uses_ts else "last_updated",
-                "columns": list(cols),
+                "columns": sorted(cols),
             }
         return self._schema
+
+    def _validate_schema_for_write(self) -> None:
+        """Verifica che lo schema sia riconosciuto prima di qualsiasi scrittura."""
+        schema = self.get_schema_info()
+        if schema.get("schema_type") != "modern":
+            cols = schema.get("columns", [])
+            raise SchemaUnrecognizedError(
+                f"Schema del database non supportato "
+                f"(colonne rilevate in 'states': {sorted(cols)}). "
+                f"Nessuna operazione di scrittura o modifica viene eseguita. "
+                f"HistoLite supporta solo lo schema moderno di HA con states_meta/metadata_id."
+            )
+
+    def _use_meta_schema(self) -> bool:
+        """True solo se il DB usa il moderno schema con states_meta."""
+        return self.get_schema_info().get("schema_type") == "modern"
 
     def _ts_filter(self, alias: str, older_than_days: int) -> tuple[str, float | str | None]:
         """Restituisce (condizione SQL, valore parametro) per filtrare per età."""
@@ -167,52 +309,6 @@ class HaDatabase:
             return row["metadata_id"] if row else None
         except sqlite3.OperationalError:
             return None
-
-    def _use_meta_schema(self) -> bool:
-        """True se il DB usa il nuovo schema con states_meta (entity_id separato).
-        
-        Solo per 'modern': in HA recorder v23+ con migrazione completata.
-        'transitional' viene trattato come legacy SE ha dati reali in entity_id;
-        altrimenti (migrazione completata, entity_id tutto NULL) → usa meta schema.
-        """
-        schema = self.get_schema_info()
-        st = schema.get("schema_type")
-        if st == "modern":
-            return True
-        if st == "transitional":
-            # Controlla se esistono record con entity_id valido (rilevazione una-tantum, cachata)
-            if "_has_legacy_data" not in schema:
-                try:
-                    with self._connect(read_only=True) as conn:
-                        conn.execute("PRAGMA busy_timeout=2000")
-                        row = conn.execute(
-                            "SELECT 1 FROM states WHERE entity_id IS NOT NULL AND entity_id != '' LIMIT 1"
-                        ).fetchone()
-                        schema["_has_legacy_data"] = row is not None
-                        logger.info(f"Schema transitional: has_legacy_data={schema['_has_legacy_data']}")
-                except Exception as e:
-                    logger.warning(f"_use_meta_schema transitional check: {e}")
-                    schema["_has_legacy_data"] = True  # fallback conservativo
-            return not schema["_has_legacy_data"]
-        return False
-
-    def _validate_schema_for_write(self) -> None:
-        """Verifica che lo schema sia riconosciuto prima di qualsiasi scrittura.
-
-        Solleva SchemaUnrecognizedError se lo schema è 'unknown'.
-        Questa eccezione viene propagata fino agli endpoint Flask che la
-        restituiscono come errore JSON visibile nelle notifiche dell'UI.
-        Non viene mai silenziata internamente.
-        """
-        schema = self.get_schema_info()
-        if schema.get("schema_type") == "unknown":
-            cols = schema.get("columns", [])
-            raise SchemaUnrecognizedError(
-                f"Schema del database non riconosciuto "
-                f"(colonne rilevate in 'states': {sorted(cols)}). "
-                f"Nessuna operazione di scrittura o modifica viene eseguita. "
-                f"Aggiorna HistoLite o apri una issue allegando questo messaggio."
-            )
 
     # ------------------------------------------------------------------
     # Statistiche generali

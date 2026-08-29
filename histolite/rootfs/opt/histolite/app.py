@@ -29,6 +29,8 @@ logging.basicConfig(
 logger = logging.getLogger("histolite")
 
 DB_PATH = os.environ.get("DB_PATH", "/config/home-assistant_v2.db")
+DB_TYPE = os.environ.get("DB_TYPE", "sqlite").strip().lower()
+DB_URL = os.environ.get("DB_URL", "").strip()
 DATA_PATH = os.environ.get("DATA_PATH", "/config")
 MAX_ROWS_PER_BATCH = int(os.environ.get("MAX_ROWS_PER_BATCH", "1000"))
 # INGRESS_PATH: HA Supervisor passa il prefisso come env var.
@@ -45,11 +47,17 @@ PORT = int(os.environ.get("PORT", "8099"))
 app = Flask(__name__)
 CORS(app)
 
-db = HaDatabase(DB_PATH)
+db = HaDatabase(DB_PATH, db_type=DB_TYPE, db_url=DB_URL)
+try:
+    db.validate_supported_backend_and_schema()
+except Exception:
+    logger.critical("Avvio HistoLite interrotto: backend o schema Home Assistant non supportato.", exc_info=True)
+    raise
+
 config_manager = ConfigManager(DATA_PATH)
 cache = CacheManager(DATA_PATH)
 
-logger.info(f"HistoLite avviato - DB: {DB_PATH} - Port: {PORT} - Ingress: {INGRESS_PATH or '(nessuno)'}")
+logger.info(f"HistoLite avviato - DB backend={db.db_type} path={DB_PATH} - Port: {PORT} - Ingress: {INGRESS_PATH or '(nessuno)'}")
 
 # ---------------------------------------------------------------------------
 # Background overview scheduler

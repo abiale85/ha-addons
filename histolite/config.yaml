@@ -18,12 +18,26 @@ arch:
   - amd64
 
 options:
+  db_type: "sqlite"
   db_path: "/config/home-assistant_v2.db"
+  db_url: ""
+  db_host: ""
+  db_port: 3306
+  db_user: ""
+  db_password: ""
+  db_name: ""
   log_level: "info"
   max_rows_per_batch: 5000
 
 schema:
+  db_type: list(sqlite|postgresql|mariadb|timescaledb)
   db_path: str
+  db_url: str?
+  db_host: str?
+  db_port: int?
+  db_user: str?
+  db_password: str?
+  db_name: str?
   log_level: list(debug|info|warning|error)
   max_rows_per_batch: int
 
