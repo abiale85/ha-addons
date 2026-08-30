@@ -196,6 +196,11 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.1.1
+- **Fix**: rilevata e ignorata la configurazione SQLite legacy quando il backend selezionato è PostgreSQL/MariaDB
+- **Fix**: evitato l’avvio con `db_path` obsoleto che puntava a `/config/home-assistant_v2.db`
+- **Logging**: aggiunto warning esplicito quando viene rilevata una configurazione non compatibile con il backend attivo
+
 ### 2.1.0
 - **Documentazione**: aggiunti esempi concreti di configurazione PostgreSQL, MariaDB e SQLite
 - **Deployment**: aggiunto un esempio di setup e di `db_url` per PostgreSQL/TimescaleDB in ambiente containerizzato
