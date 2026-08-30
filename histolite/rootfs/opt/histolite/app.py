@@ -28,8 +28,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("histolite")
 
-DB_PATH = os.environ.get("DB_PATH", "/config/home-assistant_v2.db")
 DB_TYPE = os.environ.get("DB_TYPE", "sqlite").strip().lower()
+DB_PATH = os.environ.get("DB_PATH", "/config/home-assistant_v2.db" if DB_TYPE == "sqlite" else "").strip()
 DB_URL = os.environ.get("DB_URL", "").strip()
 DATA_PATH = os.environ.get("DATA_PATH", "/config")
 MAX_ROWS_PER_BATCH = int(os.environ.get("MAX_ROWS_PER_BATCH", "1000"))

@@ -19,7 +19,11 @@ fi
 
 # Valori di default
 DB_TYPE="${DB_TYPE:-sqlite}"
-DB_PATH="${DB_PATH:-/config/home-assistant_v2.db}"
+if [ "$DB_TYPE" = "sqlite" ] && [ -z "$DB_PATH" ]; then
+  DB_PATH="/config/home-assistant_v2.db"
+else
+  DB_PATH="${DB_PATH:-}"
+fi
 DB_URL="${DB_URL:-}"
 DB_HOST="${DB_HOST:-}"
 DB_PORT="${DB_PORT:-3306}"
