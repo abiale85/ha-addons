@@ -30,10 +30,13 @@ class HaDatabase:
     """Gestisce la connessione e le operazioni sul database HA."""
 
     def __init__(self, db_path: str, db_type: str = "sqlite", db_url: Optional[str] = None):
-        self.db_path = db_path
         self.db_type = (db_type or "sqlite").lower()
         if self.db_type == "timescaledb":
             self.db_type = "postgresql"
+        if self.db_type != "sqlite":
+            self.db_path = ""
+        else:
+            self.db_path = db_path or "/config/home-assistant_v2.db"
         self.db_url = db_url
         self._schema = None
         # helper for query instrumentation

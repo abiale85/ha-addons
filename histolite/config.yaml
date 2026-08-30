@@ -19,7 +19,7 @@ arch:
 
 options:
   db_type: "sqlite"
-  db_path: "/config/home-assistant_v2.db"
+  db_path: ""
   db_url: ""
   db_host: ""
   db_port: 3306

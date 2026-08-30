@@ -19,10 +19,10 @@ fi
 
 # Valori di default
 DB_TYPE="${DB_TYPE:-sqlite}"
-if [ "$DB_TYPE" = "sqlite" ] && [ -z "$DB_PATH" ]; then
+if [ "$DB_TYPE" != "sqlite" ]; then
+  DB_PATH=""
+elif [ -z "$DB_PATH" ] || [ "$DB_PATH" = "/config/home-assistant_v2.db" ] || [ "$DB_PATH" = "/homeassistant/home-assistant_v2.db" ]; then
   DB_PATH="/config/home-assistant_v2.db"
-else
-  DB_PATH="${DB_PATH:-}"
 fi
 DB_URL="${DB_URL:-}"
 DB_HOST="${DB_HOST:-}"
