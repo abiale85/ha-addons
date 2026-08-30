@@ -30,7 +30,7 @@ options:
   max_rows_per_batch: 5000
 
 schema:
-  db_type: list(sqlite|postgresql|mariadb|timescaledb)
+  db_type: list(sqlite|postgresql|mariadb)
   db_path: str
   db_url: str?
   db_host: str?

@@ -1,7 +1,7 @@
 # HistoLite — Add-on Home Assistant
 
 Gestione intelligente della history dei sensori Home Assistant.  
-Supporta SQLite, PostgreSQL, MariaDB e TimescaleDB (via PostgreSQL), controlla automaticamente lo schema moderno di Home Assistant e blocca l'avvio se trova un backend o una struttura legacy non supportata.
+Supporta SQLite, PostgreSQL e MariaDB; TimescaleDB viene usato tramite il backend PostgreSQL senza opzioni separate. Controlla automaticamente lo schema moderno di Home Assistant e blocca l'avvio se trova un backend o una struttura legacy non supportata.
 
 ## Caratteristiche principali
 
