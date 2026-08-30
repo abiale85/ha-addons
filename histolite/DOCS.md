@@ -196,6 +196,11 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.2.0
+- **Fix critico**: `run.sh` leggeva le opzioni da `/config/options.json`, percorso inesistente: il Supervisor le scrive in `/data/options.json`. Di conseguenza `db_type` ricadeva sempre sul default `sqlite` e ogni backend PostgreSQL/MariaDB configurato veniva ignorato.
+- **Fix**: parsing di `options.json` con JSON reale (Python) invece di `grep`, che falliva sugli spazi dopo i due punti generati dal Supervisor.
+- **Sicurezza**: rimossa la rimozione automatica dei file `home-assistant_v2.db` nella config dir quando il backend non è SQLite: quei file appartengono a Home Assistant, non all'add-on.
+
 ### 2.1.1
 - **Fix**: rilevata e ignorata la configurazione SQLite legacy quando il backend selezionato è PostgreSQL/MariaDB
 - **Fix**: evitato l’avvio con `db_path` obsoleto che puntava a `/config/home-assistant_v2.db`

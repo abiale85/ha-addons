@@ -3,28 +3,41 @@
 # HistoLite - Avvio add-on
 # ==============================================================================
 
-# Leggi da /config/options.json le opzioni impostate in Home Assistant
-if [ -f /config/options.json ]; then
-  DB_TYPE=$(grep -o '"db_type":"[^"]*' /config/options.json | cut -d'"' -f4)
-  DB_PATH=$(grep -o '"db_path":"[^"]*' /config/options.json | cut -d'"' -f4)
-  DB_URL=$(grep -o '"db_url":"[^"]*' /config/options.json | cut -d'"' -f4)
-  DB_HOST=$(grep -o '"db_host":"[^"]*' /config/options.json | cut -d'"' -f4)
-  DB_PORT=$(grep -o '"db_port":[^,}]*' /config/options.json | cut -d':' -f2)
-  DB_USER=$(grep -o '"db_user":"[^"]*' /config/options.json | cut -d'"' -f4)
-  DB_PASSWORD=$(grep -o '"db_password":"[^"]*' /config/options.json | cut -d'"' -f4)
-  DB_NAME=$(grep -o '"db_name":"[^"]*' /config/options.json | cut -d'"' -f4)
-  LOG_LEVEL=$(grep -o '"log_level":"[^"]*' /config/options.json | cut -d'"' -f4)
-  MAX_ROWS_PER_BATCH=$(grep -o '"max_rows_per_batch":[^,}]*' /config/options.json | cut -d':' -f2)
+# Leggi le opzioni impostate in Home Assistant.
+# Il Supervisor scrive le opzioni dell'add-on in /data/options.json
+# (NON in /config/options.json, che e' la config dir di Home Assistant).
+OPTIONS_FILE="/data/options.json"
+if [ -f "$OPTIONS_FILE" ]; then
+  # Parsing JSON reale con Python (gia' presente nell'immagine): il file e'
+  # indentato con spazi dopo i due punti, quindi il match via grep fallirebbe.
+  eval "$(python3 - "$OPTIONS_FILE" <<'PY'
+import json, shlex, sys
+
+keys = [
+    "db_type", "db_path", "db_url", "db_host", "db_port",
+    "db_user", "db_password", "db_name", "log_level", "max_rows_per_batch",
+]
+try:
+    with open(sys.argv[1]) as fh:
+        opts = json.load(fh)
+except (OSError, ValueError):
+    opts = {}
+for key in keys:
+    value = opts.get(key)
+    if value is not None:
+        print(f"{key.upper()}={shlex.quote(str(value))}")
+PY
+)"
+else
+  echo "ATTENZIONE: $OPTIONS_FILE non trovato, uso i valori di default"
 fi
 
 # Valori di default
 DB_TYPE="${DB_TYPE:-sqlite}"
 if [ "$DB_TYPE" != "sqlite" ]; then
+  # Backend remoto: nessun percorso di file locale. NON toccare i file .db
+  # nella config dir: appartengono a Home Assistant, non all'add-on.
   DB_PATH=""
-  if [ -f "/config/home-assistant_v2.db" ] || [ -f "/homeassistant/home-assistant_v2.db" ]; then
-    echo "DEBUG: rimozione file SQLite legacy per backend non-SQLite: db_type=$DB_TYPE"
-    rm -f "/config/home-assistant_v2.db" "/homeassistant/home-assistant_v2.db"
-  fi
 elif [ -z "$DB_PATH" ] || [ "$DB_PATH" = "/config/home-assistant_v2.db" ] || [ "$DB_PATH" = "/homeassistant/home-assistant_v2.db" ]; then
   DB_PATH="/config/home-assistant_v2.db"
 fi
