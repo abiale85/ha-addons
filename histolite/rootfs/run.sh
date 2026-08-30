@@ -21,6 +21,10 @@ fi
 DB_TYPE="${DB_TYPE:-sqlite}"
 if [ "$DB_TYPE" != "sqlite" ]; then
   DB_PATH=""
+  if [ -f "/config/home-assistant_v2.db" ] || [ -f "/homeassistant/home-assistant_v2.db" ]; then
+    echo "DEBUG: rimozione file SQLite legacy per backend non-SQLite: db_type=$DB_TYPE"
+    rm -f "/config/home-assistant_v2.db" "/homeassistant/home-assistant_v2.db"
+  fi
 elif [ -z "$DB_PATH" ] || [ "$DB_PATH" = "/config/home-assistant_v2.db" ] || [ "$DB_PATH" = "/homeassistant/home-assistant_v2.db" ]; then
   DB_PATH="/config/home-assistant_v2.db"
 fi
@@ -40,6 +44,11 @@ DATA_PATH="/config"
 INGRESS_PATH="${INGRESS_PATH:-}"
 
 echo "HistoLite: Avvio..."
+echo "DEBUG: raw db_type=$DB_TYPE"
+echo "DEBUG: raw db_path=$DB_PATH"
+echo "DEBUG: raw db_url=${DB_URL:-<empty>}"
+echo "DEBUG: raw db_host=${DB_HOST:-<empty>}"
+echo "DEBUG: raw db_name=${DB_NAME:-<empty>}"
 echo "Database backend: $DB_TYPE"
 echo "Database: $DB_PATH"
 echo "Ingress path: $INGRESS_PATH"
