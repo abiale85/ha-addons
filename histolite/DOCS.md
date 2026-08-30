@@ -196,6 +196,12 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.1.0
+- **Documentazione**: aggiunti esempi concreti di configurazione PostgreSQL, MariaDB e SQLite
+- **Deployment**: aggiunto un esempio di setup e di `db_url` per PostgreSQL/TimescaleDB in ambiente containerizzato
+- **Chiarezza**: rimosso il punto ambiguo su TimescaleDB, che usa il backend PostgreSQL senza opzione separata
+- **Compatibilità**: confermato il fail-fast per schema legacy/non supportato
+
 ### 2.0.0
 - **Nuovo**: supporto a PostgreSQL e MariaDB; TimescaleDB usa lo stesso backend PostgreSQL senza opzione separata
 - **Nuovo**: configurazione backend via `db_type`, `db_url`, `db_host`, `db_port`, `db_user`, `db_password`, `db_name`

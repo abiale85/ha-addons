@@ -13,6 +13,41 @@ Supporta SQLite, PostgreSQL e MariaDB; TimescaleDB viene usato tramite il backen
 - **Cronologia** completa di tutte le operazioni eseguite
 - Richiede lo schema moderno di Home Assistant (`states_meta` + `metadata_id`)
 
+## Configurazione rapida
+
+### PostgreSQL / TimescaleDB
+
+```yaml
+db_type: postgresql
+db_url: postgresql://homeassistant:your_password@postgres:5432/homeassistant
+log_level: info
+max_rows_per_batch: 5000
+```
+
+> TimescaleDB usa lo stesso backend PostgreSQL. Non esiste una voce separata `timescaledb`.
+
+### MariaDB
+
+```yaml
+db_type: mariadb
+db_host: mariadb
+db_port: 3306
+db_user: homeassistant
+db_password: your_password
+db_name: homeassistant
+log_level: info
+max_rows_per_batch: 5000
+```
+
+### SQLite
+
+```yaml
+db_type: sqlite
+db_path: /config/home-assistant_v2.db
+log_level: info
+max_rows_per_batch: 5000
+```
+
 ## Documentazione
 
 Vedi [DOCS.md](DOCS.md) per la documentazione completa.
