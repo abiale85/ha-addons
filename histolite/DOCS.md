@@ -196,6 +196,13 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.0.0
+- **Nuovo**: supporto a PostgreSQL, MariaDB e TimescaleDB (trattato come PostgreSQL)
+- **Nuovo**: configurazione backend via `db_type`, `db_url`, `db_host`, `db_port`, `db_user`, `db_password`, `db_name`
+- **Breaking change**: rimosso il supporto per gli schemi legacy Home Assistant e per lo schema in transizione
+- **Sicurezza**: l’add-on fallisce all’avvio se rileva uno schema non supportato invece di operare su dati incompatibili
+- **Documentazione**: aggiornate configurazione e istruzioni per i database supportati
+
 ### 1.1.1
 - Fix: argomento Gunicorn `--keep-alive` (era `--keepalive`)
 - Fix RAM alta: SQLite `cache_size=-512`, `mmap_size=0`, `temp_store=FILE`
