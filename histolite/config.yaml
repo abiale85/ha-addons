@@ -31,7 +31,7 @@ options:
 
 schema:
   db_type: list(sqlite|postgresql|mariadb)
-  db_path: str
+  db_path: str?
   db_url: str?
   db_host: str?
   db_port: int?
