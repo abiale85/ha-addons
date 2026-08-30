@@ -29,7 +29,21 @@ logging.basicConfig(
 logger = logging.getLogger("histolite")
 
 DB_TYPE = os.environ.get("DB_TYPE", "sqlite").strip().lower()
-DB_PATH = os.environ.get("DB_PATH", "/config/home-assistant_v2.db" if DB_TYPE == "sqlite" else "").strip()
+RAW_DB_PATH = os.environ.get("DB_PATH", "").strip()
+LEGACY_SQLITE_PATHS = {"/config/home-assistant_v2.db", "/homeassistant/home-assistant_v2.db"}
+
+if DB_TYPE != "sqlite" and RAW_DB_PATH and RAW_DB_PATH in LEGACY_SQLITE_PATHS:
+    logger.warning(
+        "Configurazione obsoleta rilevata: db_type=%s ma db_path=%s. Il percorso SQLite legacy viene ignorato.",
+        DB_TYPE,
+        RAW_DB_PATH,
+    )
+    DB_PATH = ""
+elif DB_TYPE == "sqlite":
+    DB_PATH = RAW_DB_PATH or "/config/home-assistant_v2.db"
+else:
+    DB_PATH = RAW_DB_PATH
+
 DB_URL = os.environ.get("DB_URL", "").strip()
 DATA_PATH = os.environ.get("DATA_PATH", "/config")
 MAX_ROWS_PER_BATCH = int(os.environ.get("MAX_ROWS_PER_BATCH", "1000"))
