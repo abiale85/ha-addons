@@ -196,6 +196,9 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.3.2
+- **Fix PostgreSQL/MariaDB**: le query eseguivano `PRAGMA busy_timeout` (istruzione solo-SQLite) su qualsiasi backend, causando `syntax error at or near "PRAGMA"` su PostgreSQL. Ora la PRAGMA viene applicata solo su SQLite. *(Nota: il supporto PostgreSQL/MariaDB resta incompleto — vedi README.)*
+
 ### 2.3.1
 - **Feedback UI**: quando il caricamento dei dati di una pagina fallisce (es. Dashboard o Dettaglio sensore) ora compare un banner d'errore persistente con pulsante "Riprova", invece di un toast che sparisce dopo pochi secondi lasciando spinner o trattini a schermo.
 - **Fix**: `analyze_sensor` cattura le eccezioni e restituiva `{"error": ...}` con HTTP 200; l'endpoint `/api/sensors/<entity_id>` ora propaga 404/500 così il client tratta il caso come errore.

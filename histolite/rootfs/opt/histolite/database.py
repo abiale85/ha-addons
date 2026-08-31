@@ -145,6 +145,17 @@ class HaDatabase:
             return cur.fetchone() is not None
         return False
 
+    def _set_busy_timeout(self, conn, timeout_ms: int = 5000) -> None:
+        """`PRAGMA busy_timeout` è specifico di SQLite (attesa sui lock del file).
+        Su PostgreSQL/MariaDB è un no-op: gestiscono i lock in coda e usano MVCC,
+        quindi inviare la PRAGMA genererebbe un errore di sintassi."""
+        if self.db_type != "sqlite":
+            return
+        try:
+            conn.execute(f"PRAGMA busy_timeout={int(timeout_ms)}")
+        except Exception as e:  # pragma: no cover - best effort
+            logger.debug(f"busy_timeout non impostato: {e}")
+
     def _connect(self, read_only: bool = False):
         if self.db_type == "sqlite":
             if not os.path.exists(self.db_path):
@@ -408,7 +419,7 @@ class HaDatabase:
             """
 
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=30000")  # attendi fino a 30s per lock DB
+            self._set_busy_timeout(conn, 30000)  # attendi fino a 30s per lock DB (solo SQLite)
             try:
                 if search:
                     rows = conn.execute(query, (search_pattern, limit)).fetchall()
@@ -448,7 +459,7 @@ class HaDatabase:
 
         logger.debug(f"get_entity_list: search={search}")
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=5000")
+            self._set_busy_timeout(conn, 5000)
             try:
                 if search:
                     rows = conn.execute(query, (search_pattern,)).fetchall()
@@ -492,7 +503,7 @@ class HaDatabase:
             )
 
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=5000")
+            self._set_busy_timeout(conn, 5000)
             for raw in entity_ids:
                 pattern = str(raw).strip()
                 if not pattern:
@@ -592,7 +603,7 @@ class HaDatabase:
                 """
 
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=5000")
+            self._set_busy_timeout(conn, 5000)
             try:
                 row = conn.execute(query, (entity_id,)).fetchone()
                 if not row:
@@ -635,7 +646,7 @@ class HaDatabase:
         use_meta = self._use_meta_schema()
 
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=5000")
+            self._set_busy_timeout(conn, 5000)
             try:
                 if use_meta:
                     meta_id = self._get_metadata_id(conn, entity_id)
@@ -705,7 +716,7 @@ class HaDatabase:
         order_col = "last_updated_ts" if schema["uses_ts"] else "last_updated"
         use_meta = self._use_meta_schema()
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=5000")
+            self._set_busy_timeout(conn, 5000)
             try:
                 if use_meta:
                     meta_id = self._get_metadata_id(conn, entity_id)
@@ -753,7 +764,7 @@ class HaDatabase:
         order_col = "last_updated_ts" if schema["uses_ts"] else "last_updated"
         
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=5000")
+            self._set_busy_timeout(conn, 5000)
             try:
                 # Estrai metadata_id
                 if use_meta:
@@ -1668,7 +1679,7 @@ class HaDatabase:
         offset = (page - 1) * per_page
 
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=5000")
+            self._set_busy_timeout(conn, 5000)
             try:
                 if use_meta:
                     meta_id = self._get_metadata_id(conn, entity_id)
@@ -1779,7 +1790,7 @@ class HaDatabase:
             return {"count": 0, "samples": [], "error": "Nessun criterio valido specificato"}
 
         with self._connect(read_only=True) as conn:
-            conn.execute("PRAGMA busy_timeout=10000")
+            self._set_busy_timeout(conn, 10000)
             # Nuovo schema: antepone metadata_id filter
             if self._use_meta_schema():
                 meta_id = self._get_metadata_id(conn, entity_id)
