@@ -156,6 +156,43 @@ function showToast(message, type = 'info', duration = 4000) {
 }
 
 // ---------------------------------------------------------------------------
+// Banner d'errore persistente (per fallimenti di caricamento pagina)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mostra un banner d'errore in cima al contenuto della pagina. A differenza
+ * del toast (che scompare dopo pochi secondi) resta visibile finché la pagina
+ * non viene ricaricata o l'errore non viene rimosso con clearPageError().
+ * Da usare quando il caricamento dei dati di una pagina fallisce.
+ */
+function showPageError(message, { title = 'Errore nel caricamento dei dati' } = {}) {
+  const host = document.querySelector('.content-area') || document.body;
+  let banner = document.getElementById('page-error-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'page-error-banner';
+    banner.className = 'alert alert-danger d-flex align-items-start gap-2 mb-3';
+    banner.setAttribute('role', 'alert');
+    host.prepend(banner);
+  }
+  banner.innerHTML = `
+    <i class="bi bi-exclamation-octagon-fill flex-shrink-0 mt-1"></i>
+    <div class="flex-grow-1">
+      <strong>${title}</strong><br>
+      <span class="small">${message || 'Errore sconosciuto'}</span>
+    </div>
+    <button type="button" class="btn btn-sm btn-outline-light flex-shrink-0"
+            onclick="location.reload()">
+      <i class="bi bi-arrow-clockwise me-1"></i>Riprova
+    </button>`;
+  banner.scrollIntoView({ block: 'nearest' });
+}
+
+function clearPageError() {
+  document.getElementById('page-error-banner')?.remove();
+}
+
+// ---------------------------------------------------------------------------
 // Feedback operazioni in background
 // ---------------------------------------------------------------------------
 

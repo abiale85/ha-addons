@@ -583,6 +583,12 @@ def api_anomalies_execute(entity_id):
 def api_sensor_detail(entity_id):
     try:
         data = analyze_sensor(db, entity_id)
+        if isinstance(data, dict) and data.get("error"):
+            # analyze_sensor cattura le eccezioni e ritorna {"error": ...}:
+            # propaghiamo uno status HTTP di errore cosi' il client lo tratta
+            # come fallimento invece di renderizzare una pagina vuota.
+            status = 404 if "non trovat" in data["error"].lower() else 500
+            return jsonify(data), status
         return jsonify(data)
     except Exception as e:
         logger.error(f"Errore api/sensors/{entity_id}: {e}")

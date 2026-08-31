@@ -196,6 +196,10 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.3.1
+- **Feedback UI**: quando il caricamento dei dati di una pagina fallisce (es. Dashboard o Dettaglio sensore) ora compare un banner d'errore persistente con pulsante "Riprova", invece di un toast che sparisce dopo pochi secondi lasciando spinner o trattini a schermo.
+- **Fix**: `analyze_sensor` cattura le eccezioni e restituiva `{"error": ...}` con HTTP 200; l'endpoint `/api/sensors/<entity_id>` ora propaga 404/500 così il client tratta il caso come errore.
+
 ### 2.3.0
 - **Feedback UI**: le strategie lanciate in background non davano alcun riscontro in caso di fallimento (l'utente doveva controllare i log o la pagina Job). Ora `/api/strategy-status` espone l'esito dell'ultima esecuzione (`last_result`) e l'interfaccia mostra un toast di successo/errore al termine, sulle pagine Strategie, Sensori e Dettaglio sensore.
 - **Fix**: la pagina Sensori mostrava uno spinner infinito senza messaggi se anche la query di fallback (`/api/sensors/list`) falliva; ora viene mostrato l'errore in tabella e come toast.

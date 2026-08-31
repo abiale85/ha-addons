@@ -299,9 +299,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function loadDetail() {
   try {
+    clearPageError();
     const data = await apiFetch(`/api/sensors/${encodeURIComponent(ENTITY_ID)}`,
       { signal: pageController.signal, timeout: 60000 });
-    if (data.error) { showToast(data.error, 'danger'); return; }
+    if (data.error) { showPageError(data.error); return; }
 
     const s = data.stats;
     document.getElementById('d-total').textContent = fmt(s.record_count);
@@ -328,7 +329,7 @@ async function loadDetail() {
     loadValueRange();
 
   } catch(e) {
-    if (e.name !== 'AbortError') showToast('Errore: ' + e.message, 'danger');
+    if (e.name !== 'AbortError') showPageError(e.message);
   }
 }
 

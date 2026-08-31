@@ -284,6 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // --
 async function loadFromOverviewCache() {
   const tbody = document.getElementById('sensors-body');
+  clearPageError();
   tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento...</td></tr>';
   document.getElementById('source-badge').textContent = 'cache';
   document.getElementById('source-badge').className = 'badge bg-info';
@@ -331,9 +332,9 @@ async function loadFromOverviewCache() {
         document.getElementById('load-more-row').classList.remove('d-none');
       } catch(fallbackErr) {
         if (fallbackErr.name !== 'AbortError') {
-          tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger"><i class="bi bi-exclamation-triangle me-1"></i>Errore caricamento sensori: ${fallbackErr.message}</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger"><i class="bi bi-exclamation-triangle me-1"></i>Errore caricamento sensori</td></tr>`;
           document.getElementById('sensors-count').textContent = 'errore';
-          showToast(`Errore caricamento sensori: ${fallbackErr.message}`, 'danger');
+          showPageError(fallbackErr.message);
         }
       }
     }
@@ -351,6 +352,7 @@ async function loadFullList() {
   if (sensorLoadController) sensorLoadController.abort();
   sensorLoadController = new AbortController();
   
+  clearPageError();
   tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Caricamento lista completa…</td></tr>';
   document.getElementById('load-btn').classList.add('d-none');
   document.getElementById('stop-btn').classList.remove('d-none');
@@ -388,6 +390,7 @@ async function loadSensors() {
   if (sensorLoadController) sensorLoadController.abort();
   sensorLoadController = new AbortController();
   
+  clearPageError();
   tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Ricerca…</td></tr>';
   document.getElementById('load-btn').classList.add('d-none');
   document.getElementById('stop-btn').classList.remove('d-none');
