@@ -45,7 +45,7 @@ else:
     DB_PATH = RAW_DB_PATH
 
 DB_URL = os.environ.get("DB_URL", "").strip()
-DATA_PATH = os.environ.get("DATA_PATH", "/config")
+DATA_PATH = os.environ.get("DATA_PATH", "/data")
 MAX_ROWS_PER_BATCH = int(os.environ.get("MAX_ROWS_PER_BATCH", "1000"))
 # INGRESS_PATH: HA Supervisor passa il prefisso come env var.
 # Ingress fa da reverse proxy e STRIPPA il prefisso prima di inviare la

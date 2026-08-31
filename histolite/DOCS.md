@@ -182,10 +182,14 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 - **Compatibilità schema**: richiede lo schema moderno di Home Assistant, con `states_meta` e `metadata_id`, e rifiuta il supporto per i vecchi schemi legacy o in migrazione.
 - **Concorrenza**: per SQLite usa WAL mode con checkpoint automatico ogni 500 pagine; per PostgreSQL/MariaDB il backend delega la gestione delle transazioni al motore SQL.
 - **Sicurezza referenziale**: l'operazione di flatten e delete aggiorna i riferimenti `old_state_id` prima di eliminare le righe per evitare dangling references.
+- **Persistenza**: strategie salvate, cronologia job e cache stanno nel volume privato dell'add-on (`/data/histolite`). Disinstallando **con** "rimuovi dati" vengono cancellate; disinstallando **senza**, restano e si ritrovano al reinstall. La **configurazione del database** (backend, URL/host…) è invece un'*opzione* dell'add-on gestita dal Supervisor: per conservarla tra disinstallazioni serve un backup di Home Assistant.
 
 ---
 
 ## Changelog
+
+### 2.6.0
+- **Persistenza spostata in `/data`**: strategie, cronologia e cache erano salvate in `/config/histolite`, cioè nella cartella condivisa di Home Assistant, che sopravvive a *qualsiasi* disinstallazione (anche con "rimuovi dati"). Ora stanno in `/data/histolite`, il volume privato dell'add-on, così la disinstallazione con "rimuovi dati" le elimina davvero e quella con "mantieni dati" le conserva. I file eventualmente presenti nel vecchio percorso vengono spostati automaticamente al primo avvio.
 
 ### 2.5.0
 - **Strategie ridotte da 7 a 5**: rimosse *Media Mobile* e *Decimazione Temporale*, che erano casi particolari del *Purge Adattivo* (stesso motore `flatten_entity`): una fascia = media mobile, due fasce = decimazione temporale. Le strategie salvate di questi due tipi non sono più eseguibili — ricreale come *Purge Adattivo* con le soglie desiderate. Restano *Purge Semplice*, *Purge Adattivo*, *Rimozione Anomalie*, *Picco per Bucket*, *Deduplica Valori*.

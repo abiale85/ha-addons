@@ -18,7 +18,12 @@ class ConfigManager:
 
     def __init__(self, data_path: str):
         self.data_dir = os.path.join(data_path, "histolite")
-        self.legacy_data_dir = "/data/histolite"
+        # Percorso storico: la cartella condivisa di Home Assistant. La
+        # persistenza è stata spostata nel volume privato /data così che
+        # "disinstalla e rimuovi dati" rimuova davvero tutto e "mantieni dati"
+        # conservi tutto. I file eventualmente rimasti in /config vengono
+        # spostati (non copiati) alla prima esecuzione.
+        self.legacy_data_dir = "/config/histolite"
         os.makedirs(self.data_dir, exist_ok=True)
         self.strategies_file = os.path.join(self.data_dir, "strategies.json")
         self.jobs_file = os.path.join(self.data_dir, "jobs.json")
@@ -26,7 +31,7 @@ class ConfigManager:
         self._init_files()
 
     def _migrate_legacy_files(self):
-        """Migra file persistiti nel vecchio path /data/histolite al nuovo /config/histolite."""
+        """Sposta strategie e cronologia dal vecchio path /config/histolite al nuovo /data/histolite."""
         if os.path.abspath(self.data_dir) == os.path.abspath(self.legacy_data_dir):
             return
         for name in ("strategies.json", "jobs.json"):
@@ -36,9 +41,14 @@ class ConfigManager:
                 continue
             try:
                 shutil.copy2(src, dst)
-                logger.info(f"Migrato {name} da {src} a {dst}")
+                os.remove(src)
+                logger.info(f"Spostato {name} da {src} a {dst}")
             except OSError as e:
-                logger.warning(f"Impossibile migrare {src} -> {dst}: {e}")
+                logger.warning(f"Impossibile spostare {src} -> {dst}: {e}")
+        try:
+            os.rmdir(self.legacy_data_dir)
+        except OSError:
+            pass  # cartella non vuota o inesistente: normale
 
     def _init_files(self):
         for f in (self.strategies_file, self.jobs_file):

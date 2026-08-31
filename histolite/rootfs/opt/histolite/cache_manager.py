@@ -21,7 +21,9 @@ class CacheManager:
 
     def __init__(self, cache_dir: str = "/data"):
         self.data_dir = os.path.join(cache_dir, "histolite")
-        self.legacy_data_dir = "/data/histolite"
+        # Percorso storico nella cartella condivisa di HA; la persistenza è
+        # stata spostata nel volume privato /data.
+        self.legacy_data_dir = "/config/histolite"
         os.makedirs(self.data_dir, exist_ok=True)
         self.cache_file = os.path.join(self.data_dir, "cache.json")
         self.cache: dict[str, dict[str, Any]] = {}
@@ -29,7 +31,7 @@ class CacheManager:
         self._load_from_disk()
 
     def _migrate_legacy_cache_file(self):
-        """Migra il file cache dal vecchio path /data/histolite al nuovo /config/histolite."""
+        """Sposta il file cache dal vecchio path /config/histolite al nuovo /data/histolite."""
         if os.path.abspath(self.data_dir) == os.path.abspath(self.legacy_data_dir):
             return
         legacy_cache_file = os.path.join(self.legacy_data_dir, "cache.json")
@@ -37,9 +39,10 @@ class CacheManager:
             return
         try:
             shutil.copy2(legacy_cache_file, self.cache_file)
-            logger.info(f"Migrato cache overview da {legacy_cache_file} a {self.cache_file}")
+            os.remove(legacy_cache_file)
+            logger.info(f"Spostata cache overview da {legacy_cache_file} a {self.cache_file}")
         except OSError as e:
-            logger.warning(f"Impossibile migrare cache da {legacy_cache_file}: {e}")
+            logger.warning(f"Impossibile spostare cache da {legacy_cache_file}: {e}")
 
     def _load_from_disk(self):
         """Carica la cache persistita da disco e scarta le entry scadute/corrotte."""

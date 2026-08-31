@@ -49,7 +49,11 @@ DB_PASSWORD="${DB_PASSWORD:-}"
 DB_NAME="${DB_NAME:-}"
 LOG_LEVEL="${LOG_LEVEL:-info}"
 MAX_ROWS_PER_BATCH="${MAX_ROWS_PER_BATCH:-5000}"
-DATA_PATH="/config"
+# Persistenza dell'add-on (strategie salvate, cronologia job, cache) nel volume
+# privato /data: viene rimosso disinstallando con "rimuovi dati" e conservato
+# altrimenti. NON in /config, che è la cartella condivisa di Home Assistant e
+# sopravvive comunque a ogni disinstallazione.
+DATA_PATH="/data"
 
 # INGRESS_PATH: HA Supervisor imposta questa variabile con il path reale
 # (es. /api/hassio_ingress/TOKEN). Se non e' presente la lasciamo vuota;
@@ -63,7 +67,7 @@ echo "Ingress path: $INGRESS_PATH"
 echo "Log level: $LOG_LEVEL"
 
 # Crea directory dati persistenti se non esiste
-mkdir -p /config/histolite
+mkdir -p /data/histolite
 
 # Esporta variabili d'ambiente
 export DB_TYPE
