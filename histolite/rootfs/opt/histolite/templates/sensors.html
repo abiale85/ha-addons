@@ -134,8 +134,6 @@
           <label class="form-label">Strategia</label>
           <select class="form-select" id="quick-strategy" onchange="updateQuickParams()">
             <option value="simple_purge">Purge Semplice "” elimina tutto oltre N giorni</option>
-            <option value="temporal_decimation">Decimazione Temporale "” 1/ora poi 1/giorno</option>
-            <option value="rolling_average">Media Mobile "” sostituisce con medie (solo numerici)</option>
             <option value="adaptive_purge">Purge Adattivo "” multi-fascia personalizzabile</option>
             <option value="outlier_purge">Rimozione Anomalie "” elimina valori impossibili/fuori range</option>
           </select>
@@ -146,27 +144,6 @@
           <div class="input-group">
             <input type="number" class="form-control" id="q-simple-days" value="30" min="1">
             <span class="input-group-text">giorni</span>
-          </div>
-        </div>
-        <div id="quick-params-temporal" class="strategy-params d-none">
-          <label class="form-label">Soglia appiattimento orario</label>
-          <div class="input-group mb-2">
-            <input type="number" class="form-control" id="q-temp-days" value="14" min="1">
-            <span class="input-group-text">giorni (giornaliero = 2×)</span>
-          </div>
-        </div>
-        <div id="quick-params-rolling" class="strategy-params d-none">
-          <label class="form-label">Applica media ai dati più vecchi di</label>
-          <div class="input-group mb-2">
-            <input type="number" class="form-control" id="q-roll-days" value="7" min="1">
-            <span class="input-group-text">giorni</span>
-          </div>
-          <div>
-            <label class="form-label">Granularità</label>
-            <select class="form-select" id="q-roll-gran">
-              <option value="hour">Oraria</option>
-              <option value="day">Giornaliera</option>
-            </select>
           </div>
         </div>
         <div id="quick-params-adaptive" class="strategy-params d-none">
@@ -594,8 +571,6 @@ function updateQuickParams() {
   document.querySelectorAll('.strategy-params').forEach(el => el.classList.add('d-none'));
   const map = {
     simple_purge: 'quick-params-simple',
-    temporal_decimation: 'quick-params-temporal',
-    rolling_average: 'quick-params-rolling',
     adaptive_purge: 'quick-params-adaptive',
     outlier_purge: 'quick-params-outlier',
   };
@@ -607,11 +582,6 @@ function getQuickParams() {
   const params = {};
   if (strategy === 'simple_purge') {
     params.older_than_days = parseInt(document.getElementById('q-simple-days').value, 10);
-  } else if (strategy === 'temporal_decimation') {
-    params.older_than_days = parseInt(document.getElementById('q-temp-days').value, 10);
-  } else if (strategy === 'rolling_average') {
-    params.older_than_days = parseInt(document.getElementById('q-roll-days').value, 10);
-    params.granularity = document.getElementById('q-roll-gran').value;
   } else if (strategy === 'adaptive_purge') {
     params.threshold_1_days = parseInt(document.getElementById('q-adp-t1').value, 10);
     params.threshold_2_days = parseInt(document.getElementById('q-adp-t2').value, 10);

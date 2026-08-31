@@ -104,8 +104,6 @@
           <label class="form-label">Strategia</label>
           <select class="form-select" id="detail-strategy" onchange="updateDetailParams()">
             <option value="simple_purge">Purge Semplice</option>
-            <option value="temporal_decimation">Decimazione Temporale</option>
-            <option value="rolling_average">Media Mobile</option>
             <option value="adaptive_purge">Purge Adattivo</option>
             <option value="peak_decimation">Picco per Bucket (Contatori)</option>
             <option value="outlier_purge">Rimozione Anomalie</option>
@@ -120,26 +118,6 @@
             <input type="number" class="form-control" id="dp-simple-days" value="30" min="1">
             <span class="input-group-text">giorni</span>
           </div>
-        </div>
-        <!-- Params temporal -->
-        <div id="dp-temporal" class="detail-params d-none">
-          <label class="form-label">Soglia appiattimento orario</label>
-          <div class="input-group input-group-sm">
-            <input type="number" class="form-control" id="dp-temp-days" value="14" min="1">
-            <span class="input-group-text">giorni</span>
-          </div>
-        </div>
-        <!-- Params rolling -->
-        <div id="dp-rolling" class="detail-params d-none">
-          <label class="form-label">Applica media a dati più vecchi di</label>
-          <div class="input-group input-group-sm mb-2">
-            <input type="number" class="form-control" id="dp-roll-days" value="7" min="1">
-            <span class="input-group-text">giorni</span>
-          </div>
-          <select class="form-select form-select-sm" id="dp-roll-gran">
-            <option value="hour">Granularità oraria</option>
-            <option value="day">Granularità giornaliera</option>
-          </select>
         </div>
         <!-- Params adaptive -->
         <div id="dp-adaptive" class="detail-params d-none">
@@ -285,8 +263,6 @@ window.addEventListener('beforeunload', () => pageController.abort());
 
 const STRATEGY_DESCS = {
   simple_purge: 'Elimina tutti i record più vecchi del limite impostato.',
-  temporal_decimation: 'Mantieni 1 record/ora dopo N giorni, 1 record/giorno dopo 2N giorni.',
-  rolling_average: 'Sostituisce i record con la media del bucket (solo sensori numerici).',
   adaptive_purge: 'Gestione multi-fascia: appiattimento progressivo poi eliminazione completa.',
   peak_decimation: 'Per contatori in crescita: mantiene il MASSIMO di ogni bucket. Preserva i punti di reset automaticamente.',
   outlier_purge: 'Elimina valori anomali/impossibili: negativi, fuori range accettabile, o outlier statistici.',
@@ -409,8 +385,6 @@ function updateDetailParams() {
   document.querySelectorAll('.detail-params').forEach(el => el.classList.add('d-none'));
   const map = {
     simple_purge: 'dp-simple',
-    temporal_decimation: 'dp-temporal',
-    rolling_average: 'dp-rolling',
     adaptive_purge: 'dp-adaptive',
     peak_decimation: 'dp-peak',
     outlier_purge: 'dp-outlier',
@@ -424,11 +398,6 @@ function getDetailParams() {
   const params = {};
   if (strategy === 'simple_purge') {
     params.older_than_days = parseInt(document.getElementById('dp-simple-days').value, 10);
-  } else if (strategy === 'temporal_decimation') {
-    params.older_than_days = parseInt(document.getElementById('dp-temp-days').value, 10);
-  } else if (strategy === 'rolling_average') {
-    params.older_than_days = parseInt(document.getElementById('dp-roll-days').value, 10);
-    params.granularity = document.getElementById('dp-roll-gran').value;
   } else if (strategy === 'adaptive_purge') {
     params.threshold_1_days = parseInt(document.getElementById('dp-adp-t1').value, 10);
     params.threshold_2_days = parseInt(document.getElementById('dp-adp-t2').value, 10);

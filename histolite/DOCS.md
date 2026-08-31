@@ -81,9 +81,11 @@ Clicca **Avvia** e poi **Apri interfaccia web** (oppure accedi da Sidebar → Hi
 
 ---
 
-## Le 7 strategie
+## Le 5 strategie
 
 > Nota: puoi specificare anche wildcard nelle entità. Al momento dell'esecuzione HistoLite espande pattern come `device_tracker.*` in tutti gli entity_id corrispondenti e rimuove i duplicati.
+>
+> Nella pagina **Strategie** ogni voce mostra un'illustrazione schematica *Prima / Dopo* che rende immediato l'effetto sui dati, più una nota sulle relazioni con le altre strategie.
 
 ### 1. Purge Semplice
 Elimina **tutti** i record più vecchi di N giorni per le entità selezionate.  
@@ -91,39 +93,28 @@ Veloce e aggressivo. Consigliato per sensori con storia non necessaria.
 
 **Esempio:** elimina tutto ciò che è più vecchio di 30 giorni per `sensor.energy_power`.
 
----
-
-### 2. Decimazione Temporale
-Mantiene **1 record per ora** per dati oltre N giorni e **1 record per giorno** per dati oltre 2N giorni.  
-Conserva la storicità con un impatto contenuto.
-
-**Esempio:** con soglia 14 giorni:
-- dati 0–14 giorni: tutti i record
-- dati 14–28 giorni: 1 record/ora
-- dati > 28 giorni: 1 record/giorno
+È il caso particolare del *Purge Adattivo* con la sola fascia di eliminazione.
 
 ---
 
-### 3. Media Mobile
-Sostituisce i record originali con la **media del bucket** temporale (orario o giornaliero).  
-**Solo per sensori numerici.** Preserva la tendenza media eliminando le variazioni istantanee.
-
-**Esempio:** 86 record di `sensor.power` in un'ora (da 1500W a 2300W) diventano 1 record con valore medio 1900W.
-
----
-
-### 4. Purge Adattivo
-Gestione **multi-fascia** completamente personalizzabile:
+### 2. Purge Adattivo
+Gestione **multi-fascia** completamente personalizzabile, in un unico passaggio:
 - < Soglia 1: mantieni tutto
-- Soglia 1 → Soglia 2: appiattimento orario
+- Soglia 1 → Soglia 2: appiattimento orario (il record tenuto assume la media pesata del bucket)
 - Soglia 2 → Soglia 3: appiattimento giornaliero
 - > Soglia 3: eliminazione completa
 
-Offre il massimo controllo sulla storicità in funzione dell'età del dato.
+Offre il massimo controllo sulla storicità in funzione dell'età del dato. Impostando una sola fascia equivale a una media mobile oraria/giornaliera; con due fasce a una decimazione temporale.
+
+**Esempio:** con soglie 7 / 30 / 365 giorni:
+- dati 0–7 giorni: tutti i record
+- dati 7–30 giorni: 1 record/ora, con valore medio del bucket
+- dati 30–365 giorni: 1 record/giorno
+- dati > 365 giorni: eliminati
 
 ---
 
-### 5. Rimozione Anomalie *(nuovo)*
+### 3. Rimozione Anomalie *(nuovo)*
 Elimina valori **impossibili o fuori range** senza toccare il resto della storia.  
 Utile quando un sensore ha prodotto rilevazioni errate che falsano le statistiche.
 
@@ -196,6 +187,10 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.5.0
+- **Strategie ridotte da 7 a 5**: rimosse *Media Mobile* e *Decimazione Temporale*, che erano casi particolari del *Purge Adattivo* (stesso motore `flatten_entity`): una fascia = media mobile, due fasce = decimazione temporale. Le strategie salvate di questi due tipi non sono più eseguibili — ricreale come *Purge Adattivo* con le soglie desiderate. Restano *Purge Semplice*, *Purge Adattivo*, *Rimozione Anomalie*, *Picco per Bucket*, *Deduplica Valori*.
+- **DOCS**: rimossa una vecchia copia duplicata del documento in coda al file.
+
 ### 2.4.0
 - **Strategie – schema visivo**: ogni strategia nella pagina *Strategie* ora mostra un'illustrazione schematica "Prima / Dopo" (pallini su una linea temporale) che rende immediato capire come i record vengono ridotti o modificati.
 - **Strategie – sovrapposizioni**: aggiunta per ogni strategia una nota "Relazione con le altre". In sintesi: *Media Mobile*, *Decimazione Temporale* e *Purge Semplice* sono casi particolari di *Purge Adattivo* (stesso motore `flatten`/`purge`); *Picco per Bucket*, *Rimozione Anomalie* e *Deduplica Valori* sono invece indipendenti e complementari.
@@ -265,143 +260,6 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 - Endpoint `/api/overview/refresh` per forzare ricalcolo
 - Dashboard: badge "Cached", timestamp ultimo aggiornamento, pulsante Aggiorna
 - Script `release.ps1` per automazione versioning
-
-### 1.0.0
-- Rilascio iniziale
-- 4 strategie: Purge Semplice, Decimazione Temporale, Media Mobile, Purge Adattivo
-- Dashboard con statistiche e grafici
-- Interfaccia sensori con ricerca e selezione multipla
-- Anteprima dry-run
-- Backup automatico
-- Cronologia operazioni
-- Supporto schema HA pre/post 2023
-
-
-HistoLite analizza il database SQLite di Home Assistant (`home-assistant_v2.db`) e permette di alleggerire la history registrata da sensori che cambiano continuamente valore: sensori elettrici, velocità di rete, consumi, temperatura, ecc.
-
----
-
-## Funzionalità
-
-### Dashboard
-- Panoramica del database: dimensione totale, numero di stati, distribuzione nelle tabelle
-- Top 10 sensori per numero di record registrati
-- Grafico distribuzione e tabella dettagliata
-- Strumenti di manutenzione rapida (cleanup attributi orfani, VACUUM, purge statistics)
-
-### Sensori
-- Elenco completo di tutti i sensori tracciati con conteggio record
-- Ricerca live e ordinamento
-- Selezione multipla per operazioni batch
-- Barra visiva della proporzione record
-
-### Dettaglio sensore
-- Grafico densità record per giorno (fino a 1 anno)
-- Ultimi valori registrati
-- Stima del risparmio potenziale con le diverse strategie
-- Applicazione immediata di qualsiasi strategia
-
-### Strategie
-- Creazione e salvataggio di strategie con nome personalizzato
-- Selezione entità con autocompletamento
-- Esecuzione one-click delle strategie salvate
-
-### Cronologia
-- Log completo di tutte le operazioni eseguite
-- Dettaglio parametri, entità coinvolte, record eliminati, backup creati
-
----
-
-## Installazione
-
-### 1. Aggiungi il repository
-
-Nel Supervisor di Home Assistant, vai su **Add-on Store → Repository** e aggiungi l'URL del tuo repository.
-
-### 2. Installa HistoLite
-
-Cerca "HistoLite" nell'Add-on Store e clicca **Installa**.
-
-### 3. Configura le opzioni
-
-```yaml
-db_path: /homeassistant/home-assistant_v2.db
-log_level: info
-max_rows_per_batch: 5000
-```
-
-| Opzione | Descrizione | Default |
-|---------|-------------|---------|
-| `db_path` | Percorso del database SQLite di HA | `/homeassistant/home-assistant_v2.db` |
-| `log_level` | Livello di log (`debug`, `info`, `warning`, `error`) | `info` |
-| `max_rows_per_batch` | Record da elaborare per batch (ridurre in caso di problemi) | `5000` |
-
-### 4. Avvia l'add-on
-
-Clicca **Avvia** e poi **Apri interfaccia web** (oppure accedi da Sidebar → HistoLite).
-
----
-
-## Le 4 strategie
-
-### 1. Purge Semplice
-Elimina **tutti** i record più vecchi di N giorni per le entità selezionate.  
-Veloce e aggressivo. Consigliato per sensori con storia non necessaria.
-
-**Esempio:** elimina tutto ciò che è più vecchio di 30 giorni per `sensor.energy_power`.
-
----
-
-### 2. Decimazione Temporale
-Mantiene **1 record per ora** per dati oltre N giorni e **1 record per giorno** per dati oltre 2N giorni.  
-Conserva la storicità con un impatto contenuto.
-
-**Esempio:** con soglia 14 giorni:
-- dati 0-14 giorni: tutti i record
-- dati 14-28 giorni: 1 record/ora
-- dati > 28 giorni: 1 record/giorno
-
----
-
-### 3. Media Mobile
-Sostituisce i record originali con la **media del bucket** temporale (orario o giornaliero).  
-**Solo per sensori numerici.** Preserva la tendenza media eliminando le variazioni istantanee.
-
-**Esempio:** 86 record di `sensor.power` in un'ora (da 1500W a 2300W) diventano 1 record con valore medio 1900W.
-
----
-
-### 4. Purge Adattivo
-Gestione **multi-fascia** completamente personalizzabile:
-- < Soglia 1: mantieni tutto
-- Soglia 1 → Soglia 2: appiattimento orario
-- Soglia 2 → Soglia 3: appiattimento giornaliero  
-- > Soglia 3: eliminazione completa
-
-Offre il massimo controllo sulla storicità in funzione dell'età del dato.
-
----
-
-## Anteprima (Dry Run)
-
-Qualsiasi strategia può essere eseguita in **modalità anteprima** prima dell'applicazione reale. L'anteprima mostra il numero stimato di record che verrebbero modificati/eliminati senza toccare il database.
-
----
-
-## Backup
-
----
-
-## Note tecniche
-
-- **Database**: solo SQLite (`home-assistant_v2.db`). Supporto per altri DB previsto in versioni future.
-- **Compatibilità schema**: gestisce sia lo schema con colonne `last_updated` (datetime) che quello con `last_updated_ts` (Unix timestamp float) introdotto in HA 2023.x.
-- **Concorrenza**: usa WAL mode di SQLite. Le operazioni vengono eseguite in batch per minimizzare il lock.
-- **Sicurezza**: l'operazione di flatten aggiorna i riferimenti `old_state_id` prima di eliminare le righe per evitare dangling references. Gli attributi orfani vengono gestiti dalla funzione di manutenzione dedicata.
-
----
-
-## Changelog
 
 ### 1.0.0
 - Rilascio iniziale

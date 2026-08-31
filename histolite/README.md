@@ -6,7 +6,7 @@ Supporta SQLite, PostgreSQL e MariaDB; TimescaleDB viene usato tramite il backen
 ## Caratteristiche principali
 
 - **Dashboard** con Top 10 sensori, dimensione DB e distribuzione tabelle
-- **7 strategie** di alleggerimento: Purge Semplice, Decimazione Temporale, Media Mobile, Purge Adattivo, Rimozione Anomalie, Picco per Bucket, Deduplica Valori
+- **5 strategie** di alleggerimento: Purge Semplice, Purge Adattivo, Rimozione Anomalie, Picco per Bucket, Deduplica Valori
 - **Anteprima dry-run** prima di ogni operazione
 - **Backup automatico** del database prima di modifiche
 - **Interfaccia completamente italiana** accessibile via HA Ingress

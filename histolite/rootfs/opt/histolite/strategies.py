@@ -1,6 +1,6 @@
 """
 HistoLite - Strategie di ottimizzazione
-Definizione ed esecuzione delle 7 strategie disponibili.
+Definizione ed esecuzione delle 5 strategie disponibili.
 """
 
 import logging
@@ -104,171 +104,7 @@ class SimplePurge(Strategy):
 
 
 # ---------------------------------------------------------------------------
-# Strategia 2 - Decimazione Temporale
-# ---------------------------------------------------------------------------
-
-class TemporalDecimation(Strategy):
-    """
-    Mantiene 1 record per ora per dati oltre N giorni,
-    e 1 record per giorno per dati oltre 2N giorni.
-    Bilanciamento tra riduzione e conservazione della storicità.
-    """
-    name = "temporal_decimation"
-    label = "Decimazione Temporale"
-    description = (
-        "Mantiene 1 record/ora per dati > N giorni e 1 record/giorno per dati > 2N giorni."
-    )
-
-    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
-        older_than_days = int(params.get("older_than_days", 14))
-        retry_attempts = int(params.get("retry_attempts", 2))
-        retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
-        results = []
-        for eid in entity_ids:
-            if cancel_event and cancel_event.is_set():
-                logger.info(f"[TemporalDecimation] Cancellazione richiesta, interrotto a {eid}")
-                break
-            try:
-                def _op(_attempt: int):
-                    # Fase 1: appiattimento orario per dati > older_than_days
-                    r1 = db.flatten_entity(
-                        eid, older_than_days, granularity="hour",
-                        dry_run=dry_run, batch_size=batch_size
-                    )
-                    # Fase 2: appiattimento giornaliero per dati > 2 * older_than_days
-                    r2 = db.flatten_entity(
-                        eid, older_than_days * 2, granularity="day",
-                        dry_run=dry_run, batch_size=batch_size
-                    )
-                    return r1, r2
-
-                r1, r2 = _run_with_retry(
-                    "TemporalDecimation",
-                    eid,
-                    _op,
-                    retry_attempts=retry_attempts,
-                    retry_delay_sec=retry_delay_sec,
-                )
-                results.append({
-                    "entity_id": eid,
-                    "phase_hourly": r1,
-                    "phase_daily": r2,
-                    "total_deleted": (
-                        r1.get("deleted", r1.get("estimated_deleted", 0)) +
-                        r2.get("deleted", r2.get("estimated_deleted", 0))
-                    ),
-                })
-                logger.info(f"[TemporalDecimation] {eid}: completato")
-            except Exception as e:
-                logger.error(f"[TemporalDecimation] Errore su {eid} dopo {retry_attempts} tentativi: {e}")
-                results.append({"entity_id": eid, "error": str(e)})
-
-        total_deleted = sum(r.get("total_deleted", 0) for r in results if "total_deleted" in r)
-        return {
-            "strategy": self.name,
-            "dry_run": dry_run,
-            "params": params,
-            "entity_count": len(entity_ids),
-            "total_deleted": total_deleted,
-            "details": results,
-        }
-
-
-# ---------------------------------------------------------------------------
-# Strategia 3 - Media Mobile (Rolling Average)
-# ---------------------------------------------------------------------------
-
-class RollingAverage(Strategy):
-    """
-    Sostituisce i valori originali con medie orarie o giornaliere
-    man mano che i dati invecchiano.
-    Solo per sensori numerici.
-    """
-    name = "rolling_average"
-    label = "Media Mobile"
-    description = (
-        "Sostituisce i valori originali con medie (orarie o giornaliere) "
-        "per i dati più vecchi di N giorni."
-    )
-
-    def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
-        older_than_days = int(params.get("older_than_days", 7))
-        granularity = params.get("granularity", "hour")  # "hour" o "day"
-        retry_attempts = int(params.get("retry_attempts", 2))
-        retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
-        results = []
-        for eid in entity_ids:
-            if cancel_event and cancel_event.is_set():
-                logger.info(f"[RollingAverage] Cancellazione richiesta, interrotto a {eid}")
-                break
-            logger.debug(f"[RollingAverage] Inizio elaborazione {eid}")
-            try:
-                def _op(_attempt: int):
-                    logger.debug(f"[RollingAverage] Tentativo {_attempt}/{retry_attempts} - {eid}")
-                    stats = db.get_sensor_stats(eid)
-                    logger.debug(f"[RollingAverage] Stats per {eid}: {stats}")
-                    
-                    if not stats:
-                        logger.warning(f"[RollingAverage] {eid}: stats è None, impossibile verificare se numerico")
-                        return {
-                            "entity_id": eid,
-                            "skipped": True,
-                            "reason": "Impossibile recuperare stats - sensore potrebbe non esistere",
-                        }
-                    
-                    if not stats.get("is_numeric", False):
-                        logger.info(f"[RollingAverage] {eid}: sensore non numerico (is_numeric={stats.get('is_numeric')})")
-                        return {
-                            "entity_id": eid,
-                            "skipped": True,
-                            "reason": "Sensore non numerico - strategia inapplicabile",
-                        }
-
-                    logger.debug(f"[RollingAverage] {eid}: inizio flatten_entity (older_than={older_than_days}, granularity={granularity})")
-                    r = db.flatten_entity(
-                        eid, older_than_days, granularity=granularity,
-                        dry_run=dry_run, batch_size=batch_size
-                    )
-                    r["entity_id"] = eid
-                    return r
-
-                r = _run_with_retry(
-                    "RollingAverage",
-                    eid,
-                    _op,
-                    retry_attempts=retry_attempts,
-                    retry_delay_sec=retry_delay_sec,
-                )
-                if r.get("skipped"):
-                    logger.info(f"[RollingAverage] {eid}: skipped - {r.get('reason')}")
-                    results.append(r)
-                    continue
-                r["entity_id"] = eid
-                results.append(r)
-                logger.info(f"[RollingAverage] {eid}: "
-                            f"{'(DRY) ' if dry_run else ''}"
-                            f"~{r.get('deleted', r.get('estimated_deleted', 0))} eliminati")
-            except Exception as e:
-                logger.error(f"[RollingAverage] Errore su {eid} dopo {retry_attempts} tentativi: {e}", exc_info=True)
-                results.append({"entity_id": eid, "error": str(e)})
-
-        total_deleted = sum(
-            r.get("deleted", r.get("estimated_deleted", 0))
-            for r in results
-            if not r.get("skipped")
-        )
-        return {
-            "strategy": self.name,
-            "dry_run": dry_run,
-            "params": params,
-            "entity_count": len(entity_ids),
-            "total_deleted": total_deleted,
-            "details": results,
-        }
-
-
-# ---------------------------------------------------------------------------
-# Strategia 4 - Purge Adattivo
+# Strategia 2 - Purge Adattivo
 # ---------------------------------------------------------------------------
 
 class AdaptivePurge(Strategy):
@@ -358,7 +194,7 @@ class AdaptivePurge(Strategy):
 
 
 # ---------------------------------------------------------------------------
-# Strategia 5 - Outlier Purge (Rimozione Anomalie)
+# Strategia 3 - Outlier Purge (Rimozione Anomalie)
 # ---------------------------------------------------------------------------
 
 class OutlierPurge(Strategy):
@@ -451,7 +287,7 @@ class OutlierPurge(Strategy):
 
 
 # ---------------------------------------------------------------------------
-# Strategia 6 - Peak Decimation (Massimo per bucket — contatori/crescita)
+# Strategia 4 - Peak Decimation (Massimo per bucket — contatori/crescita)
 # ---------------------------------------------------------------------------
 
 class PeakDecimation(Strategy):
@@ -544,7 +380,7 @@ class PeakDecimation(Strategy):
 
 
 # ---------------------------------------------------------------------------
-# Strategia 7 - Deduplica Sequenziale
+# Strategia 5 - Deduplica Sequenziale
 # ---------------------------------------------------------------------------
 
 class DeduplicateValues(Strategy):
@@ -612,8 +448,6 @@ class DeduplicateValues(Strategy):
 
 STRATEGY_REGISTRY = {
     SimplePurge.name: SimplePurge,
-    TemporalDecimation.name: TemporalDecimation,
-    RollingAverage.name: RollingAverage,
     AdaptivePurge.name: AdaptivePurge,
     OutlierPurge.name: OutlierPurge,
     PeakDecimation.name: PeakDecimation,
@@ -633,35 +467,11 @@ STRATEGY_LIST = [
         ],
     },
     {
-        "name": TemporalDecimation.name,
-        "label": TemporalDecimation.label,
-        "description": TemporalDecimation.description,
-        "example": "Se hai 1.000 letture distribuite in un giorno, ne lascia poche per fascia oraria e poi una al giorno, anche se i valori cambiano.",
-        "overlap": "Stesso motore di 'Media Mobile' (il record tenuto assume la media pesata del bucket), ma con due passaggi: prima orario, poi giornaliero a 2×. È un 'Purge Adattivo' a 2 fasce senza eliminazione finale.",
-        "params": [
-            {"key": "older_than_days", "label": "Soglia appiattimento orario (giorni)",
-             "type": "number", "default": 14, "min": 1},
-        ],
-    },
-    {
-        "name": RollingAverage.name,
-        "label": RollingAverage.label,
-        "description": RollingAverage.description,
-        "example": "Utile su un termometro numerico: invece di tenere tutte le letture, le sostituisce con una media oraria o giornaliera.",
-        "overlap": "È una 'Decimazione Temporale'/'Purge Adattivo' a una sola fascia. Anche la 'Decimazione Temporale' sostituisce i valori con la media: la differenza è solo il numero di passaggi.",
-        "params": [
-            {"key": "older_than_days", "label": "Applica media a dati più vecchi di (giorni)",
-             "type": "number", "default": 7, "min": 1},
-            {"key": "granularity", "label": "Granularità media",
-             "type": "select", "options": ["hour", "day"], "default": "hour"},
-        ],
-    },
-    {
         "name": AdaptivePurge.name,
         "label": AdaptivePurge.label,
         "description": AdaptivePurge.description,
         "example": "Se vuoi tenere tutto all'inizio, poi ridurre a ore, poi a giorni e infine cancellare del tutto il molto vecchio.",
-        "overlap": "È la forma generale: con una sola fascia equivale a 'Media Mobile', con due fasce a 'Decimazione Temporale', con la sola eliminazione finale a 'Purge Semplice'. Se conosci questa, le altre tre sono scorciatoie.",
+        "overlap": "Strategia più completa: combina in un unico passaggio appiattimento orario, appiattimento giornaliero ed eliminazione finale. 'Purge Semplice' ne è il sottoinsieme con la sola eliminazione.",
         "params": [
             {"key": "threshold_1_days", "label": "Appiattimento orario dopo (giorni)",
              "type": "number", "default": 7, "min": 1},
@@ -695,7 +505,7 @@ STRATEGY_LIST = [
         "label": PeakDecimation.label,
         "description": PeakDecimation.description,
         "example": "Per un contatore energia conserva il valore massimo di ogni ora o giorno, invece della media, e protegge i reset.",
-        "overlap": "Simile a 'Media Mobile' nella riduzione (1 record per bucket), ma tiene il MASSIMO invece della media e riconosce i reset: per i contatori cumulativi la media non ha senso, quindi non è un doppione.",
+        "overlap": "Riduce come il 'Purge Adattivo' (1 record per bucket) ma tiene il valore MASSIMO invece della media e riconosce i reset: per i contatori cumulativi la media non ha senso.",
         "params": [
             {"key": "older_than_days", "label": "Applica a dati più vecchi di (giorni)",
              "type": "number", "default": 7, "min": 1},
@@ -712,7 +522,7 @@ STRATEGY_LIST = [
         "label": DeduplicateValues.label,
         "description": DeduplicateValues.description,
         "example": "Se un sensore continua a pubblicare 21.3 con timestamp diversi, lascia il primo record della sequenza e, se continua per giorni, al massimo uno al giorno.",
-        "overlap": "Nessuna sovrapposizione: non riduce la risoluzione né altera i valori, rimuove solo ripetizioni identiche consecutive. È quasi senza perdita e si combina bene con le strategie temporali.",
+        "overlap": "Nessuna sovrapposizione: non riduce la risoluzione né altera i valori, rimuove solo ripetizioni identiche consecutive. È quasi senza perdita e si combina bene con il 'Purge Adattivo'.",
         "params": [
             {"key": "older_than_days", "label": "Applica a dati più vecchi di (giorni)",
              "type": "number", "default": 7, "min": 1},
