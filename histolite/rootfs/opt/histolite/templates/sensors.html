@@ -318,16 +318,24 @@ async function loadFromOverviewCache() {
     if (e.name !== 'AbortError') {
       document.getElementById('source-badge').textContent = 'lista';
       document.getElementById('source-badge').className = 'badge bg-secondary';
-      const entities = await apiFetch('/api/sensors/list', { signal: sensorLoadController.signal });
-      allSensors = (entities || []).map(entity => ({ entity_id: entity.entity_id, record_count: 0 }));
-      if (allSensors.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">Nessuna entità trovata nel database.</td></tr>';
-        document.getElementById('sensors-count').textContent = '0 entità';
-        return;
+      try {
+        const entities = await apiFetch('/api/sensors/list', { signal: sensorLoadController.signal });
+        allSensors = (entities || []).map(entity => ({ entity_id: entity.entity_id, record_count: 0 }));
+        if (allSensors.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">Nessuna entità trovata nel database.</td></tr>';
+          document.getElementById('sensors-count').textContent = '0 entità';
+          return;
+        }
+        sortAndRender();
+        document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
+        document.getElementById('load-more-row').classList.remove('d-none');
+      } catch(fallbackErr) {
+        if (fallbackErr.name !== 'AbortError') {
+          tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-danger"><i class="bi bi-exclamation-triangle me-1"></i>Errore caricamento sensori: ${fallbackErr.message}</td></tr>`;
+          document.getElementById('sensors-count').textContent = 'errore';
+          showToast(`Errore caricamento sensori: ${fallbackErr.message}`, 'danger');
+        }
       }
-      sortAndRender();
-      document.getElementById('sensors-count').textContent = allSensors.length + ' entità';
-      document.getElementById('load-more-row').classList.remove('d-none');
     }
   } finally {
     sensorLoadController = null;
@@ -643,8 +651,8 @@ async function executeQuickStrategy() {
   try {
     const result = await apiPost('/api/execute', { strategy_type: strategy, entity_ids, params });
     if (result.started) {
-      showToast('Strategia avviata in background, controlla i log', 'info');
-      setTimeout(() => window.location.reload(), 2000);
+      showToast('Strategia avviata in background…', 'info');
+      await reportBackgroundStrategyAndReload();
       return;
     }
     showToast(

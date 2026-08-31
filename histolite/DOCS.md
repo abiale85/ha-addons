@@ -196,6 +196,10 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.3.0
+- **Feedback UI**: le strategie lanciate in background non davano alcun riscontro in caso di fallimento (l'utente doveva controllare i log o la pagina Job). Ora `/api/strategy-status` espone l'esito dell'ultima esecuzione (`last_result`) e l'interfaccia mostra un toast di successo/errore al termine, sulle pagine Strategie, Sensori e Dettaglio sensore.
+- **Fix**: la pagina Sensori mostrava uno spinner infinito senza messaggi se anche la query di fallback (`/api/sensors/list`) falliva; ora viene mostrato l'errore in tabella e come toast.
+
 ### 2.2.2
 - **Pulizia**: rimosse le righe `DEBUG:` temporanee in `run.sh` (dump di `db_type`/`db_path`/`db_url`/`db_host`/`db_name` ad ogni avvio) usate per diagnosticare il problema di lettura delle opzioni.
 

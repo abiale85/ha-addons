@@ -156,6 +156,58 @@ function showToast(message, type = 'info', duration = 4000) {
 }
 
 // ---------------------------------------------------------------------------
+// Feedback operazioni in background
+// ---------------------------------------------------------------------------
+
+/**
+ * Memorizza un messaggio da mostrare come toast dopo un reload di pagina.
+ * I toast non sopravvivono al reload, quindi passiamo per sessionStorage.
+ */
+function flashAfterReload(message, type = 'info') {
+  try {
+    sessionStorage.setItem('histolite_flash', JSON.stringify({ message, type }));
+  } catch {}
+}
+
+/**
+ * Interroga /api/strategy-status finché l'operazione in background non termina.
+ * Ritorna l'oggetto last_result ({ ok, summary, ... }) oppure null.
+ * Gli errori di rete transitori non interrompono il polling.
+ */
+async function pollBackgroundStrategy({ intervalMs = 2000, onProgress = null } = {}) {
+  // Piccola attesa iniziale: dà tempo al worker di registrarsi come "running".
+  await new Promise(r => setTimeout(r, 800));
+  while (true) {
+    let status;
+    try {
+      status = await apiGet('/api/strategy-status', { timeout: 5000 });
+    } catch {
+      await new Promise(r => setTimeout(r, intervalMs));
+      continue;
+    }
+    if (status.running) {
+      if (onProgress) onProgress(status);
+      await new Promise(r => setTimeout(r, intervalMs));
+      continue;
+    }
+    return status.last_result || null;
+  }
+}
+
+/**
+ * Notifica l'esito di una strategia lanciata in background e ricarica la pagina.
+ */
+async function reportBackgroundStrategyAndReload() {
+  const last = await pollBackgroundStrategy();
+  if (last && !last.ok) {
+    flashAfterReload(`Strategia fallita: ${last.summary}`, 'danger');
+  } else {
+    flashAfterReload(last ? `Strategia completata: ${last.summary}` : 'Strategia completata', 'success');
+  }
+  window.location.reload();
+}
+
+// ---------------------------------------------------------------------------
 // Dimensione DB in topbar (aggiornamento passivo)
 // ---------------------------------------------------------------------------
 
@@ -169,6 +221,16 @@ async function updateDbSizeBadge() {
 
 // Aggiorna ogni 60 secondi
 document.addEventListener('DOMContentLoaded', () => {
+  // Mostra un eventuale messaggio "flash" salvato prima di un reload.
+  try {
+    const raw = sessionStorage.getItem('histolite_flash');
+    if (raw) {
+      sessionStorage.removeItem('histolite_flash');
+      const f = JSON.parse(raw);
+      if (f && f.message) showToast(f.message, f.type || 'info', 6000);
+    }
+  } catch {}
+
   updateDbSizeBadge();
   setInterval(updateDbSizeBadge, 60_000);
 });

@@ -382,6 +382,14 @@ async function _pollExecutionStatus() {
           clearInterval(_executionPollInterval);
           _executionPollInterval = null;
         }
+        // Notifica l'esito (il toast viene mostrato dopo il reload).
+        const lr = status.last_result;
+        if (lr) {
+          flashAfterReload(
+            lr.ok ? `Strategia completata: ${lr.summary}` : `Strategia fallita: ${lr.summary}`,
+            lr.ok ? 'success' : 'danger'
+          );
+        }
         // Ricarica la pagina per mostrare il nuovo last_run
         window.location.reload();
       }

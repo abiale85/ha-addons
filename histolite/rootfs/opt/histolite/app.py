@@ -122,20 +122,48 @@ _strategy_lock = threading.Lock()
 _running_strategy = None  # {'id': str, 'start_time': time, 'manual': bool, 'cancel_event': Event}
 _running_strategy_lock = threading.Lock()
 _cancel_strategy_event = threading.Event()
+# Esito dell'ultima strategia in background completata, esposto via
+# /api/strategy-status cosi' l'UI puo' notificare successo/errore anche quando
+# l'esecuzione avviene fuori dal ciclo richiesta/risposta.
+_last_strategy_result = None  # {'id': str, 'ok': bool, 'summary': str, 'finished_ts': float}
+
+
+def _record_strategy_result(strategy_id: str, result: dict | None, error: str | None = None) -> None:
+    """Memorizza l'esito dell'ultima strategia in background per l'endpoint di stato."""
+    global _last_strategy_result
+    if error is not None:
+        ok, summary = False, error
+    elif result is None:
+        ok, summary = False, "Esito sconosciuto"
+    elif result.get("error"):
+        ok, summary = False, str(result["error"])
+    else:
+        deleted = result.get("total_deleted", 0)
+        dur = result.get("duration_sec")
+        summary = f"{deleted} record eliminati" + (f" in {dur}s" if dur is not None else "")
+        ok = True
+    with _running_strategy_lock:
+        _last_strategy_result = {
+            "id": strategy_id,
+            "ok": ok,
+            "summary": summary,
+            "finished_ts": time.time(),
+        }
 
 def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
     """Esegue una strategia acquisendo il lock globale.
     Tra batch successivi il thread cede il controllo (inter_batch_sleep).
     is_manual: True se richiesta manualmente, False se schedulata."""
-    global _running_strategy, _cancel_strategy_event
-    
+    global _running_strategy, _cancel_strategy_event, _last_strategy_result
+
     name = saved.get("name", saved["id"])
     strategy_id = saved["id"]
     logger.info(f"[Scheduler] Avvio strategia '{name}'")
-    
+
     # Traccia inizio esecuzione
     with _running_strategy_lock:
         _cancel_strategy_event.clear()
+        _last_strategy_result = None
         _running_strategy = {
             'id': strategy_id,
             'start_time': time.time(),
@@ -169,9 +197,11 @@ def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
             logger.error(f"[Scheduler] Errore aggiornamento last_run per '{name}': {upd_err}", exc_info=True)
             raise
         logger.info(f"[Scheduler] Completata '{name}' in {result['duration_sec']}s")
+        _record_strategy_result(strategy_id, result)
         return result
     except Exception as e:
         logger.error(f"[Scheduler] Errore esecuzione '{name}': {e}", exc_info=True)
+        _record_strategy_result(strategy_id, None, error=str(e))
         now_iso = datetime.now().isoformat(timespec="seconds")
         try:
             config_manager.update_strategy_last_run(saved["id"], now_iso)
@@ -192,10 +222,11 @@ def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
 
 def _run_ad_hoc_strategy_safe(strategy_type: str, entity_ids: list[str], params: dict) -> dict:
     """Esegue una strategia non salvata in un worker dedicato."""
-    global _running_strategy, _cancel_strategy_event
+    global _running_strategy, _cancel_strategy_event, _last_strategy_result
 
     with _running_strategy_lock:
         _cancel_strategy_event.clear()
+        _last_strategy_result = None
         _running_strategy = {
             'id': strategy_type,
             'start_time': time.time(),
@@ -220,9 +251,11 @@ def _run_ad_hoc_strategy_safe(strategy_type: str, entity_ids: list[str], params:
             logger.error(f"[Scheduler] Errore salvataggio job ad hoc '{strategy_type}': {save_err}", exc_info=True)
             raise
         logger.info(f"[Scheduler] Completata esecuzione ad hoc '{strategy_type}' in {result['duration_sec']}s")
+        _record_strategy_result(strategy_type, result)
         return result
     except Exception as e:
         logger.error(f"[Scheduler] Errore esecuzione ad hoc '{strategy_type}': {e}", exc_info=True)
+        _record_strategy_result(strategy_type, None, error=str(e))
         try:
             config_manager.save_job({"error": str(e)}, strategy_type, entity_ids, params, dry_run=False)
         except Exception as save_err:
@@ -719,8 +752,11 @@ def api_strategy_status():
     global _running_strategy
     with _running_strategy_lock:
         if _running_strategy is None:
-            return jsonify({"running": False})
-        
+            resp = {"running": False}
+            if _last_strategy_result is not None:
+                resp["last_result"] = _last_strategy_result
+            return jsonify(resp)
+
         elapsed = time.time() - _running_strategy['start_time']
         return jsonify({
             "running": True,
