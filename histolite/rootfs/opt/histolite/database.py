@@ -190,7 +190,7 @@ class HaDatabase:
         if schema.get("schema_type") != "modern":
             raise SchemaUnrecognizedError(
                 "Schema Home Assistant non supportato: HistoLite supporta solo lo schema moderno con "
-                "states_meta + metadata_id. Lo schema legacy o in transizione non è supportato."
+                "states_meta + states.metadata_id. Lo schema legacy non è supportato."
             )
         return schema
 
@@ -198,9 +198,12 @@ class HaDatabase:
         """Rileva la versione dello schema del database HA.
 
         schema_type:
-          'modern'       - supportato
-          'unsupported_legacy' - schema HA legacy, non supportato
-          'unsupported_transitional' - schema in migrazione, non supportato
+          'modern'       - supportato (states_meta + states.metadata_id presenti).
+                           La colonna vestigiale states.entity_id, mantenuta
+                           nullable da HA dopo la migrazione a states_meta, è
+                           normale e NON rende lo schema "transitional".
+          'unsupported_legacy' - schema HA legacy (solo states.entity_id, niente
+                                 metadata_id), non supportato
           'unsupported_unknown' - schema non riconoscibile, non supportato
         """
         if self._schema:
@@ -226,16 +229,18 @@ class HaDatabase:
             has_entity_id_in_states = "entity_id" in cols
             has_states_meta = self._table_exists(conn, "states_meta")
 
-            if has_entity_id_in_states and not has_metadata:
+            # Lo schema moderno di HA è identificato da states_meta + states.metadata_id.
+            # HA mantiene la vecchia colonna states.entity_id come colonna vestigiale
+            # nullable anche dopo la migrazione, quindi la sua presenza NON indica
+            # uno schema "in transizione": conta solo metadata_id + states_meta.
+            if has_metadata and has_states_meta:
+                schema_type = "modern"
+            elif has_entity_id_in_states and not has_metadata:
                 schema_type = "unsupported_legacy"
-            elif has_metadata and not has_entity_id_in_states:
-                schema_type = "modern" if has_states_meta else "unsupported_unknown"
-            elif has_entity_id_in_states and has_metadata:
-                schema_type = "unsupported_transitional"
             else:
                 schema_type = "unsupported_unknown"
 
-            if schema_type in {"unsupported_legacy", "unsupported_transitional", "unsupported_unknown"}:
+            if schema_type in {"unsupported_legacy", "unsupported_unknown"}:
                 logger.error(
                     "Schema del database non supportato! "
                     f"Colonne states: {sorted(cols)}. "

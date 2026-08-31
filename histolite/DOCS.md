@@ -196,6 +196,9 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.2.1
+- **Fix critico**: il rilevamento dello schema classificava come "transitional" (e quindi rifiutava l'avvio) ogni database HA moderno in cui la colonna `states.entity_id` è ancora presente. HA mantiene quella colonna vestigiale nullable anche dopo la migrazione a `states_meta`, quindi la sua presenza è normale. Ora lo schema è "modern" quando esistono `states_meta` e `states.metadata_id`, indipendentemente da `states.entity_id`.
+
 ### 2.2.0
 - **Fix critico**: `run.sh` leggeva le opzioni da `/config/options.json`, percorso inesistente: il Supervisor le scrive in `/data/options.json`. Di conseguenza `db_type` ricadeva sempre sul default `sqlite` e ogni backend PostgreSQL/MariaDB configurato veniva ignorato.
 - **Fix**: parsing di `options.json` con JSON reale (Python) invece di `grep`, che falliva sugli spazi dopo i due punti generati dal Supervisor.
