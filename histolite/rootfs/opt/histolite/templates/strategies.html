@@ -3,6 +3,29 @@
 {% block page_title %}<i class="bi bi-sliders me-2"></i>Strategie{% endblock %}
 
 {% block content %}
+<style>
+  .strategy-illustration { margin: 0; }
+  .strategy-illustration svg {
+    width: 100%; height: auto; display: block;
+    background: rgba(255,255,255,.03);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 6px;
+  }
+  .strategy-illustration .ill-caption {
+    font-size: 11px; color: #9aa0a6; margin-top: 4px;
+  }
+  .ill-label   { fill: #9aa0a6; font-size: 9px; }
+  .ill-axis    { stroke: #495057; stroke-width: 1; }
+  .ill-band    { fill: rgba(255,255,255,.035); }
+  .ill-threshold { stroke: #dc3545; stroke-width: 1; stroke-dasharray: 3 2; }
+  .ill-zone-label { fill: #6c757d; font-size: 8px; }
+  .ill-dot         { fill: #4dd4c4; }
+  .ill-dot-mod     { fill: #ffc107; }
+  .ill-dot-peak    { fill: #0dcaf0; }
+  .ill-dot-out     { fill: #dc3545; }
+  .ill-dot-removed { fill: #6c757d; opacity: .3; }
+  .strategy-overlap { color: #d0a85f; }
+</style>
 <div class="row g-4">
   <!-- Colonna sinistra: tipi di strategia -->
   <div class="col-lg-5">
@@ -27,8 +50,16 @@
               <div class="accordion-body pt-0">
                 <p class="text-muted small mb-2">{{ s.description }}</p>
                 {% if s.example %}
-                <div class="small text-secondary mb-3">
+                <div class="small text-secondary mb-2">
                   <strong>Esempio:</strong> {{ s.example }}
+                </div>
+                {% endif %}
+                <figure class="strategy-illustration mb-2" data-strategy="{{ s.name }}">
+                  <div class="text-muted small">Anteprima riduzione dati…</div>
+                </figure>
+                {% if s.overlap %}
+                <div class="small strategy-overlap mb-3">
+                  <i class="bi bi-diagram-3 me-1"></i>{{ s.overlap }}
                 </div>
                 {% endif %}
                 <button class="btn btn-sm btn-outline-primary js-prefill-strategy"
@@ -736,5 +767,150 @@ document.getElementById('entity-tags')?.addEventListener('click', e => {
     removeEntity(removeBtn.dataset.removeEntityId);
   }
 });
+
+// -------------------------------------------------------------------------
+// Illustrazioni schematiche "Prima / Dopo" per ogni strategia
+// Mostrano come i record (pallini su una linea temporale) vengono ridotti.
+// -------------------------------------------------------------------------
+(function initStrategyIllustrations() {
+  const VB_W = 320, VB_H = 128, PAD_L = 46, PAD_R = 10, ROW_H = 36;
+  const ROWS = [{ label: 'Prima', base: 52 }, { label: 'Dopo', base: 112 }];
+  const xOf = t => PAD_L + (VB_W - PAD_R - PAD_L) * Math.max(0, Math.min(1, t));
+  const yOf = (base, v) => base - ROW_H * Math.max(0.05, Math.min(0.95, v));
+  const clamp = v => Math.max(0.08, Math.min(0.92, v));
+
+  function raw(n, fn) {
+    const a = [];
+    for (let i = 0; i < n; i++) a.push({ t: i / (n - 1), v: clamp(fn(i)) });
+    return a;
+  }
+  const BASE = raw(26, i => 0.5 + 0.34 * Math.sin(i * 0.8) * (0.7 + 0.3 * Math.cos(i * 0.27)));
+  const SAW  = raw(24, i => 0.15 + ((i % 6) / 5) * 0.7);
+  const mean = pts => pts.reduce((s, p) => s + p.v, 0) / (pts.length || 1);
+
+  // left of `thr` -> one `cls` point per bucket at the bucket mean, rest removed;
+  // right of `thr` -> kept as-is.
+  function flattenLeft(series, thr, buckets, cls) {
+    const out = [];
+    for (let b = 0; b < buckets; b++) {
+      const lo = b / buckets * thr, hi = (b + 1) / buckets * thr;
+      const inB = series.filter(p => p.t >= lo && p.t < hi);
+      if (!inB.length) continue;
+      out.push({ t: (lo + hi) / 2, v: mean(inB), cls });
+      inB.forEach(p => out.push({ ...p, cls: 'removed' }));
+    }
+    series.filter(p => p.t >= thr).forEach(p => out.push({ ...p, cls: 'keep' }));
+    return out;
+  }
+
+  const SPECS = {
+    simple_purge: {
+      thresholds: [0.5], before: BASE,
+      after: BASE.map(p => ({ ...p, cls: p.t < 0.5 ? 'removed' : 'keep' })),
+      caption: 'Prima della soglia: tutto eliminato. Dopo la soglia: invariato. Nessun valore viene modificato.',
+    },
+    rolling_average: {
+      thresholds: [0.6], before: BASE,
+      after: flattenLeft(BASE, 0.6, 3, 'mod'),
+      caption: 'Prima della soglia: 1 punto per bucket col valore medio del bucket (giallo). Dopo la soglia: invariato.',
+    },
+    temporal_decimation: {
+      thresholds: [0.34, 0.66], before: BASE,
+      after: (() => {
+        const out = [];
+        [[0, 0.17], [0.17, 0.34]].forEach(([lo, hi]) => {
+          const inB = BASE.filter(p => p.t >= lo && p.t < hi);
+          if (inB.length) { out.push({ t: (lo + hi) / 2, v: mean(inB), cls: 'mod' }); inB.forEach(p => out.push({ ...p, cls: 'removed' })); }
+        });
+        [[0.34, 0.42], [0.42, 0.5], [0.5, 0.58], [0.58, 0.66]].forEach(([lo, hi]) => {
+          const inB = BASE.filter(p => p.t >= lo && p.t < hi);
+          if (inB.length) { out.push({ t: (lo + hi) / 2, v: mean(inB), cls: 'mod' }); inB.forEach(p => out.push({ ...p, cls: 'removed' })); }
+        });
+        BASE.filter(p => p.t >= 0.66).forEach(p => out.push({ ...p, cls: 'keep' }));
+        return out;
+      })(),
+      caption: 'Vecchio: 1 al giorno. Medio: 1 all’ora. Recente: invariato. I punti tenuti assumono la media del bucket.',
+    },
+    adaptive_purge: {
+      thresholds: [0.25, 0.5, 0.75], before: BASE,
+      after: (() => {
+        const out = [];
+        BASE.filter(p => p.t < 0.25).forEach(p => out.push({ ...p, cls: 'removed' }));
+        [[0.25, 0.375], [0.375, 0.5]].forEach(([lo, hi]) => {
+          const inB = BASE.filter(p => p.t >= lo && p.t < hi);
+          if (inB.length) { out.push({ t: (lo + hi) / 2, v: mean(inB), cls: 'mod' }); inB.forEach(p => out.push({ ...p, cls: 'removed' })); }
+        });
+        [[0.5, 0.583], [0.583, 0.666], [0.666, 0.75]].forEach(([lo, hi]) => {
+          const inB = BASE.filter(p => p.t >= lo && p.t < hi);
+          if (inB.length) { out.push({ t: (lo + hi) / 2, v: mean(inB), cls: 'mod' }); inB.forEach(p => out.push({ ...p, cls: 'removed' })); }
+        });
+        BASE.filter(p => p.t >= 0.75).forEach(p => out.push({ ...p, cls: 'keep' }));
+        return out;
+      })(),
+      caption: 'Quattro fasce dal più vecchio: elimina → 1 al giorno → 1 all’ora → tutto invariato.',
+    },
+    outlier_purge: {
+      thresholds: [],
+      before: BASE.map((p, i) => i === 5 ? { ...p, v: 0.97, cls: 'out' } : i === 13 ? { ...p, v: 0.04, cls: 'out' } : i === 20 ? { ...p, v: 0.98, cls: 'out' } : { ...p, cls: 'keep' }),
+      after: BASE.map((p, i) => (i === 5 || i === 13 || i === 20) ? { ...p, v: i === 13 ? 0.04 : 0.975, cls: 'removed' } : { ...p, cls: 'keep' }),
+      caption: 'Toglie solo i valori impossibili o fuori scala (rosso). Tutto il resto resta identico: la forma della serie non cambia.',
+    },
+    peak_decimation: {
+      thresholds: [0.6],
+      before: SAW.map(p => ({ ...p, cls: 'keep' })),
+      after: (() => {
+        const out = [];
+        const left = SAW.filter(p => p.t < 0.6);
+        [[0, 0.2], [0.2, 0.4], [0.4, 0.6]].forEach(([lo, hi]) => {
+          const inB = left.filter(p => p.t >= lo && p.t < hi);
+          if (!inB.length) return;
+          out.push({ t: (lo + hi) / 2, v: Math.max(...inB.map(p => p.v)), cls: 'peak' });
+          inB.forEach(p => out.push({ ...p, cls: 'removed' }));
+        });
+        SAW.filter(p => p.t >= 0.6).forEach(p => out.push({ ...p, cls: 'keep' }));
+        return out;
+      })(),
+      caption: 'Prima della soglia: 1 punto per bucket col valore MASSIMO (azzurro), non la media. I cali bruschi (reset del contatore) vengono preservati.',
+    },
+    deduplicate_values: {
+      thresholds: [],
+      before: (() => { const a = []; [0.3, 0.62, 0.42, 0.72].forEach((v, r) => { for (let k = 0; k < 6; k++) a.push({ t: (r * 6 + k) / 23, v, cls: 'keep' }); }); return a; })(),
+      after: (() => { const a = []; [0.3, 0.62, 0.42, 0.72].forEach((v, r) => { for (let k = 0; k < 6; k++) a.push({ t: (r * 6 + k) / 23, v, cls: k === 0 ? 'keep' : 'removed' }); }); return a; })(),
+      caption: 'Le sequenze di valori identici si riducono al primo record. Se il valore non cambia per giorni, resta al massimo 1 record al giorno.',
+    },
+  };
+
+  function dot(p, base) {
+    const cls = p.cls === 'removed' ? 'ill-dot-removed'
+      : p.cls === 'mod' ? 'ill-dot ill-dot-mod'
+      : p.cls === 'peak' ? 'ill-dot ill-dot-peak'
+      : p.cls === 'out' ? 'ill-dot ill-dot-out'
+      : 'ill-dot';
+    const r = (p.cls === 'mod' || p.cls === 'peak') ? 3.1 : (p.cls === 'removed' ? 2 : 2.5);
+    return `<circle class="${cls}" cx="${xOf(p.t).toFixed(1)}" cy="${yOf(base, p.v).toFixed(1)}" r="${r}"/>`;
+  }
+
+  function renderSvg(spec) {
+    let s = `<svg viewBox="0 0 ${VB_W} ${VB_H}" role="img" aria-label="Schema di riduzione dei dati">`;
+    s += `<text class="ill-zone-label" x="${PAD_L}" y="10">← più vecchio · più recente →</text>`;
+    for (const row of ROWS) {
+      s += `<text class="ill-label" x="4" y="${row.base - ROW_H / 2}">${row.label}</text>`;
+      s += `<line class="ill-axis" x1="${PAD_L}" y1="${row.base}" x2="${VB_W - PAD_R}" y2="${row.base}"/>`;
+      for (const th of spec.thresholds) {
+        const x = xOf(th);
+        s += `<line class="ill-threshold" x1="${x}" y1="${row.base - ROW_H - 4}" x2="${x}" y2="${row.base}"/>`;
+      }
+    }
+    s += spec.before.map(p => dot(p, ROWS[0].base)).join('');
+    s += spec.after.map(p => dot(p, ROWS[1].base)).join('');
+    return s + '</svg>';
+  }
+
+  document.querySelectorAll('.strategy-illustration').forEach(fig => {
+    const spec = SPECS[fig.dataset.strategy];
+    if (!spec) { fig.remove(); return; }
+    fig.innerHTML = renderSvg(spec) + `<figcaption class="ill-caption">${spec.caption}</figcaption>`;
+  });
+})();
 </script>
 {% endblock %}

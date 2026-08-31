@@ -626,6 +626,7 @@ STRATEGY_LIST = [
         "label": SimplePurge.label,
         "description": SimplePurge.description,
         "example": "Se un sensore registra ogni minuto, elimina tutto cio' che e' piu' vecchio della soglia senza guardare il valore.",
+        "overlap": "Coincide con la sola fase finale del 'Purge Adattivo' (eliminazione oltre soglia). Usa questa se non ti serve conservare nulla del passato remoto.",
         "params": [
             {"key": "older_than_days", "label": "Elimina record più vecchi di (giorni)",
              "type": "number", "default": 30, "min": 1},
@@ -636,6 +637,7 @@ STRATEGY_LIST = [
         "label": TemporalDecimation.label,
         "description": TemporalDecimation.description,
         "example": "Se hai 1.000 letture distribuite in un giorno, ne lascia poche per fascia oraria e poi una al giorno, anche se i valori cambiano.",
+        "overlap": "Stesso motore di 'Media Mobile' (il record tenuto assume la media pesata del bucket), ma con due passaggi: prima orario, poi giornaliero a 2×. È un 'Purge Adattivo' a 2 fasce senza eliminazione finale.",
         "params": [
             {"key": "older_than_days", "label": "Soglia appiattimento orario (giorni)",
              "type": "number", "default": 14, "min": 1},
@@ -646,6 +648,7 @@ STRATEGY_LIST = [
         "label": RollingAverage.label,
         "description": RollingAverage.description,
         "example": "Utile su un termometro numerico: invece di tenere tutte le letture, le sostituisce con una media oraria o giornaliera.",
+        "overlap": "È una 'Decimazione Temporale'/'Purge Adattivo' a una sola fascia. Anche la 'Decimazione Temporale' sostituisce i valori con la media: la differenza è solo il numero di passaggi.",
         "params": [
             {"key": "older_than_days", "label": "Applica media a dati più vecchi di (giorni)",
              "type": "number", "default": 7, "min": 1},
@@ -658,6 +661,7 @@ STRATEGY_LIST = [
         "label": AdaptivePurge.label,
         "description": AdaptivePurge.description,
         "example": "Se vuoi tenere tutto all'inizio, poi ridurre a ore, poi a giorni e infine cancellare del tutto il molto vecchio.",
+        "overlap": "È la forma generale: con una sola fascia equivale a 'Media Mobile', con due fasce a 'Decimazione Temporale', con la sola eliminazione finale a 'Purge Semplice'. Se conosci questa, le altre tre sono scorciatoie.",
         "params": [
             {"key": "threshold_1_days", "label": "Appiattimento orario dopo (giorni)",
              "type": "number", "default": 7, "min": 1},
@@ -672,6 +676,7 @@ STRATEGY_LIST = [
         "label": OutlierPurge.label,
         "description": OutlierPurge.description,
         "example": "Se un sensore manda -999, unavailable o valori fuori range, li elimina senza toccare i record validi.",
+        "overlap": "Nessuna sovrapposizione con le altre: agisce sulla qualità dei valori, non sulla risoluzione temporale. Complementare, si può usare prima di qualsiasi altra strategia.",
         "params": [
             {"key": "remove_negative", "label": "Elimina valori negativi",
              "type": "boolean", "default": False},
@@ -690,6 +695,7 @@ STRATEGY_LIST = [
         "label": PeakDecimation.label,
         "description": PeakDecimation.description,
         "example": "Per un contatore energia conserva il valore massimo di ogni ora o giorno, invece della media, e protegge i reset.",
+        "overlap": "Simile a 'Media Mobile' nella riduzione (1 record per bucket), ma tiene il MASSIMO invece della media e riconosce i reset: per i contatori cumulativi la media non ha senso, quindi non è un doppione.",
         "params": [
             {"key": "older_than_days", "label": "Applica a dati più vecchi di (giorni)",
              "type": "number", "default": 7, "min": 1},
@@ -706,6 +712,7 @@ STRATEGY_LIST = [
         "label": DeduplicateValues.label,
         "description": DeduplicateValues.description,
         "example": "Se un sensore continua a pubblicare 21.3 con timestamp diversi, lascia il primo record della sequenza e, se continua per giorni, al massimo uno al giorno.",
+        "overlap": "Nessuna sovrapposizione: non riduce la risoluzione né altera i valori, rimuove solo ripetizioni identiche consecutive. È quasi senza perdita e si combina bene con le strategie temporali.",
         "params": [
             {"key": "older_than_days", "label": "Applica a dati più vecchi di (giorni)",
              "type": "number", "default": 7, "min": 1},

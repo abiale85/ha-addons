@@ -196,6 +196,10 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.4.0
+- **Strategie – schema visivo**: ogni strategia nella pagina *Strategie* ora mostra un'illustrazione schematica "Prima / Dopo" (pallini su una linea temporale) che rende immediato capire come i record vengono ridotti o modificati.
+- **Strategie – sovrapposizioni**: aggiunta per ogni strategia una nota "Relazione con le altre". In sintesi: *Media Mobile*, *Decimazione Temporale* e *Purge Semplice* sono casi particolari di *Purge Adattivo* (stesso motore `flatten`/`purge`); *Picco per Bucket*, *Rimozione Anomalie* e *Deduplica Valori* sono invece indipendenti e complementari.
+
 ### 2.3.2
 - **Fix PostgreSQL/MariaDB**: le query eseguivano `PRAGMA busy_timeout` (istruzione solo-SQLite) su qualsiasi backend, causando `syntax error at or near "PRAGMA"` su PostgreSQL. Ora la PRAGMA viene applicata solo su SQLite. *(Nota: il supporto PostgreSQL/MariaDB resta incompleto — vedi README.)*
 
