@@ -1,6 +1,9 @@
 """
 HistoLite - Gestione database Home Assistant
-Connessione, analisi e operazioni su home-assistant_v2.db (SQLite)
+Connessione, analisi e operazioni sul database del recorder di Home Assistant.
+
+Le query sono scritte in sintassi SQLite; per PostgreSQL e MariaDB vengono
+tradotte al volo (vedi ``sql_compat``).
 """
 
 import sqlite3
@@ -11,6 +14,8 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
+
+from sql_compat import CompatConnection, db_error_types
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,9 @@ class HaDatabase:
         self._schema = None
         # helper for query instrumentation
         self._query_counter = 0
+        # Classi d'eccezione "operational" del backend attivo (usate nei
+        # blocchi try/except al posto del solo sqlite3.OperationalError).
+        self._db_errors = db_error_types(self.db_type)
 
     def _build_sqlite_uri(self, read_only: bool = False) -> str:
         if not os.path.exists(self.db_path):
@@ -50,6 +58,7 @@ class HaDatabase:
     def _connect_postgresql(self, read_only: bool = False):
         try:
             import psycopg
+            from psycopg.rows import dict_row
         except ImportError as exc:
             raise UnsupportedDatabaseError(
                 "Supporto PostgreSQL richiesto ma il driver psycopg non è installato. "
@@ -60,7 +69,9 @@ class HaDatabase:
             raise UnsupportedDatabaseError(
                 "Per PostgreSQL è richiesta la variabile DB_URL o la voce di configurazione db_url."
             )
-        conn = psycopg.connect(connection_str, connect_timeout=30, sslmode="prefer")
+        conn = psycopg.connect(
+            connection_str, connect_timeout=30, sslmode="prefer", row_factory=dict_row
+        )
         conn.autocommit = False if not read_only else True
         return conn
 
@@ -132,7 +143,9 @@ class HaDatabase:
         if self.db_type == "postgresql":
             cur = conn.cursor()
             cur.execute(
-                "SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = %s",
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema NOT IN ('pg_catalog','information_schema') "
+                "AND table_name = %s LIMIT 1",
                 (table_name,),
             )
             return cur.fetchone() is not None
@@ -186,9 +199,15 @@ class HaDatabase:
                     logger.debug(f"states_meta index creation: {e}")
             return conn
         if self.db_type == "postgresql":
-            return self._connect_postgresql(read_only=read_only)
+            return CompatConnection(
+                self._connect_postgresql(read_only=read_only), "postgresql"
+            )
         if self.db_type == "mariadb":
-            return self._connect_mariadb(read_only=read_only)
+            return CompatConnection(
+                self._connect_mariadb(read_only=read_only),
+                "mariadb",
+                cursor_kwargs={"dictionary": True},
+            )
         raise UnsupportedDatabaseError(
             f"Backend '{self.db_type}' non supportato. Supportati: sqlite, postgresql, mariadb."
         )
@@ -227,7 +246,9 @@ class HaDatabase:
                 if self.db_type == "postgresql":
                     cur = conn.cursor()
                     cur.execute(
-                        "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'states' ORDER BY ordinal_position"
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema NOT IN ('pg_catalog','information_schema') "
+                        "AND table_name = 'states' ORDER BY ordinal_position"
                     )
                 else:
                     cur = conn.cursor()
@@ -318,7 +339,7 @@ class HaDatabase:
         c_str = str(counter) if counter > 0 else "?"
         logger.info(f"[DBQueryEND#{c_str}] duration_ms={ms} sql={short_sql}")
 
-    def _get_metadata_id(self, conn: sqlite3.Connection, entity_id: str) -> Optional[int]:
+    def _get_metadata_id(self, conn, entity_id: str) -> Optional[int]:
         """Nuovo schema HA: risolve entity_id → metadata_id tramite states_meta."""
         try:
             row = conn.execute(
@@ -326,7 +347,7 @@ class HaDatabase:
                 (entity_id,),
             ).fetchone()
             return row["metadata_id"] if row else None
-        except sqlite3.OperationalError:
+        except self._db_errors:
             return None
 
     # ------------------------------------------------------------------
@@ -334,8 +355,25 @@ class HaDatabase:
     # ------------------------------------------------------------------
 
     def get_db_size(self) -> int:
-        """Dimensione del file DB in bytes."""
-        return os.path.getsize(self.db_path)
+        """Dimensione del database in bytes."""
+        if self.db_type == "sqlite":
+            return os.path.getsize(self.db_path)
+        try:
+            with self._connect(read_only=True) as conn:
+                if self.db_type == "postgresql":
+                    row = conn.execute(
+                        "SELECT pg_database_size(current_database()) AS s"
+                    ).fetchone()
+                else:  # mariadb
+                    row = conn.execute(
+                        "SELECT SUM(data_length + index_length) AS s "
+                        "FROM information_schema.tables WHERE table_schema = DATABASE()"
+                    ).fetchone()
+            val = row["s"] if row else None
+            return int(val) if val is not None else 0
+        except Exception as e:
+            logger.warning(f"get_db_size ({self.db_type}): {e}")
+            return 0
 
     def get_table_counts(self) -> dict:
         """Conteggio righe nelle principali tabelle."""
@@ -346,7 +384,7 @@ class HaDatabase:
                 try:
                     row = conn.execute(f"SELECT COUNT(*) as c FROM {table}").fetchone()
                     result[table] = row["c"] if row else 0
-                except sqlite3.OperationalError:
+                except self._db_errors:
                     result[table] = 0
         return result
 
@@ -358,7 +396,7 @@ class HaDatabase:
                     "SELECT * FROM recorder_runs ORDER BY start DESC LIMIT 5"
                 ).fetchall()
                 return [dict(r) for r in rows]
-            except sqlite3.OperationalError:
+            except self._db_errors:
                 return []
 
     # ------------------------------------------------------------------
@@ -428,7 +466,7 @@ class HaDatabase:
                 results = [dict(r) for r in rows]
                 logger.info(f"get_top_sensors: {len(results)} sensori trovati")
                 return results
-            except sqlite3.OperationalError as e:
+            except self._db_errors as e:
                 logger.error(f"get_top_sensors query error: {e}", exc_info=True)
                 return []
             except Exception as e:
@@ -468,7 +506,7 @@ class HaDatabase:
                 results = [{"entity_id": r["entity_id"]} for r in rows]
                 logger.info(f"get_entity_list: {len(results)} entità trovate")
                 return results
-            except sqlite3.OperationalError as e:
+            except self._db_errors as e:
                 if "timeout" in str(e).lower():
                     logger.warning(f"get_entity_list: timeout")
                 else:
@@ -525,7 +563,7 @@ class HaDatabase:
                 )
                 try:
                     rows = conn.execute(query, (like_pattern,)).fetchall()
-                except sqlite3.OperationalError as e:
+                except self._db_errors as e:
                     logger.warning(f"resolve_entity_ids query error for pattern {pattern}: {e}")
                     unmatched_patterns.append(pattern)
                     continue
@@ -616,13 +654,13 @@ class HaDatabase:
                         return None
                     sample = conn.execute(
                         "SELECT state FROM states WHERE metadata_id = ? "
-                        "ORDER BY rowid DESC LIMIT 50",
+                        "ORDER BY state_id DESC LIMIT 50",
                         (meta_id,),
                     ).fetchall()
                 else:
                     sample = conn.execute(
                         "SELECT state FROM states WHERE entity_id = ? "
-                        "ORDER BY rowid DESC LIMIT 50",
+                        "ORDER BY state_id DESC LIMIT 50",
                         (entity_id,),
                     ).fetchall()
                 numeric_count = 0
@@ -634,7 +672,7 @@ class HaDatabase:
                         pass
                 result["is_numeric"] = numeric_count > len(sample) * 0.6
                 return result
-            except sqlite3.OperationalError as e:
+            except self._db_errors as e:
                 if "timeout" in str(e).lower():
                     logger.warning(f"get_sensor_stats {entity_id}: timeout")
                     return None
@@ -704,7 +742,7 @@ class HaDatabase:
                         """
                         rows = conn.execute(query, (entity_id, f"-{days}")).fetchall()
                 return [dict(r) for r in rows]
-            except sqlite3.OperationalError as e:
+            except self._db_errors as e:
                 if "timeout" in str(e).lower():
                     logger.warning(f"get_sensor_daily_counts {entity_id}: timeout")
                     return []
@@ -734,7 +772,7 @@ class HaDatabase:
                         (entity_id, limit),
                     ).fetchall()
                 return [dict(r) for r in rows]
-            except sqlite3.OperationalError as e:
+            except self._db_errors as e:
                 if "timeout" in str(e).lower():
                     logger.warning(f"get_recent_values {entity_id}: timeout")
                     return []
@@ -793,10 +831,10 @@ class HaDatabase:
                     """
                 
                 attr_row = conn.execute(attr_query, (id_param,)).fetchone()
-                
-                if attr_row and attr_row[0]:
+                attr_json = attr_row["attributes"] if attr_row else None
+                if attr_json:
                     try:
-                        attrs = json.loads(attr_row[0])
+                        attrs = json.loads(attr_json)
                         result["configured_min"] = attrs.get("min_value")
                         result["configured_max"] = attrs.get("max_value")
                         result["unit"] = attrs.get("unit_of_measurement")
@@ -840,7 +878,7 @@ class HaDatabase:
                         if stddev_row:
                             result["recent_stddev"] = stddev_row["stddev_val"]
                 
-            except sqlite3.OperationalError as e:
+            except self._db_errors as e:
                 logger.warning(f"get_sensor_value_range {entity_id}: {e}")
         
         return result
@@ -1043,13 +1081,13 @@ class HaDatabase:
                                     THEN duration_sec
                                     ELSE 0
                                 END) > 0
-                        THEN ROUND(SUM(value_weighted) / CAST(SUM(CASE 
-                                                                    WHEN state NOT IN ('unknown','unavailable','')
-                                                                         AND numeric_value IS NOT NULL
-                                                                    THEN duration_sec
-                                                                    ELSE 0
-                                                                END) AS REAL), 4)
-                        ELSE NULL 
+                        THEN SUM(value_weighted) / (SUM(CASE
+                                                        WHEN state NOT IN ('unknown','unavailable','')
+                                                             AND numeric_value IS NOT NULL
+                                                        THEN duration_sec
+                                                        ELSE 0
+                                                    END) * 1.0)
+                        ELSE NULL
                     END AS avg_value
                 FROM durations
                 GROUP BY bucket
@@ -1225,7 +1263,7 @@ class HaDatabase:
                             PARTITION BY {bucket_expr}
                             ORDER BY
                                 CASE WHEN state NOT IN ('unknown','unavailable','')
-                                     THEN CAST(state AS REAL) ELSE -1e18 END DESC,
+                                     THEN COALESCE(CAST(state AS REAL), -1e18) ELSE -1e18 END DESC,
                                 state_id DESC
                         ) AS rn
                     FROM states
@@ -1482,7 +1520,7 @@ class HaDatabase:
                     ORDER BY record_count DESC
                 """).fetchall()
                 return [dict(r) for r in rows]
-            except sqlite3.OperationalError:
+            except self._db_errors:
                 return []
 
     def purge_statistics_short_term(
@@ -1531,7 +1569,7 @@ class HaDatabase:
                         )
                         conn.commit()
                 return {"deleted": estimated if not dry_run else 0, "estimated": estimated, "dry_run": dry_run}
-            except sqlite3.OperationalError as e:
+            except self._db_errors as e:
                 logger.error(f"Errore purge statistics_short_term: {e}")
                 return {"deleted": 0, "error": str(e), "dry_run": dry_run}
 
@@ -1560,17 +1598,32 @@ class HaDatabase:
                     """)
                     conn.commit()
                 return {"deleted": estimated if not dry_run else 0, "estimated": estimated, "dry_run": dry_run}
-            except sqlite3.OperationalError:
+            except self._db_errors:
                 return {"deleted": 0, "estimated": 0, "dry_run": dry_run}
 
     def run_vacuum(self) -> bool:
-        """Esegue VACUUM per recuperare spazio su disco."""
+        """Recupera spazio su disco (VACUUM su SQLite/PostgreSQL, OPTIMIZE su MariaDB)."""
         try:
-            with self._connect(read_only=False) as conn:
-                conn.execute("VACUUM")
-            return True
+            if self.db_type == "sqlite":
+                with self._connect(read_only=False) as conn:
+                    conn.execute("VACUUM")
+                return True
+            if self.db_type == "postgresql":
+                # VACUUM non può girare in una transazione: serve autocommit.
+                raw = self._connect_postgresql(read_only=False)
+                try:
+                    raw.autocommit = True
+                    raw.execute("VACUUM (ANALYZE)")
+                finally:
+                    raw.close()
+                return True
+            if self.db_type == "mariadb":
+                with self._connect(read_only=False) as conn:
+                    conn.execute("OPTIMIZE TABLE states")
+                return True
+            return False
         except Exception as e:
-            logger.error(f"Errore VACUUM: {e}")
+            logger.error(f"Errore VACUUM/OPTIMIZE ({self.db_type}): {e}")
             return False
 
     def cleanup_null_entities(self, dry_run: bool = False) -> dict:
@@ -1747,7 +1800,7 @@ class HaDatabase:
                     "pages": max(1, (total + per_page - 1) // per_page),
                     "records": records,
                 }
-            except sqlite3.OperationalError as e:
+            except self._db_errors as e:
                 if "timeout" in str(e).lower():
                     logger.warning(f"get_sensor_values {entity_id}: timeout")
                     return {"total": 0, "page": 1, "per_page": per_page, "pages": 1, "records": [], "error": "timeout"}
@@ -1813,7 +1866,7 @@ class HaDatabase:
                 count = count_row["c"] if count_row else 0
                 samples = [dict(r) for r in conn.execute(query, params).fetchall()[:20]]
                 return {"count": count, "samples": samples}
-            except sqlite3.OperationalError as e:
+            except self._db_errors as e:
                 if "timeout" in str(e).lower():
                     return {"count": -1, "samples": [], "error": "Timeout - usa filtri più restrittivi"}
                 raise

@@ -188,6 +188,12 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.7.0
+- **PostgreSQL / MariaDB funzionanti**: il layer query era scritto solo per SQLite (placeholder `?`, `datetime()/strftime()/unixepoch`, `CAST(... AS REAL)` permissivo, `typeof()`, dimensione DB dal file, `VACUUM`). Aggiunto un modulo di compatibilità (`sql_compat`) che traduce le query al dialetto del backend, restituisce righe come dizionari e adatta placeholder ed errori. Ora dashboard, dettaglio sensore, modifica storia e tutte le strategie girano anche su PostgreSQL/TimescaleDB e MariaDB.
+  - Dimensione DB via `pg_database_size()` / `information_schema` invece della dimensione file.
+  - Manutenzione: `VACUUM (ANALYZE)` in autocommit su PostgreSQL, `OPTIMIZE TABLE` su MariaDB.
+  - Rilevamento schema indipendente dal `search_path` (cerca la tabella `states` in qualunque schema non di sistema).
+
 ### 2.6.0
 - **Persistenza spostata in `/data`**: strategie, cronologia e cache erano salvate in `/config/histolite`, cioè nella cartella condivisa di Home Assistant, che sopravvive a *qualsiasi* disinstallazione (anche con "rimuovi dati"). Ora stanno in `/data/histolite`, il volume privato dell'add-on, così la disinstallazione con "rimuovi dati" le elimina davvero e quella con "mantieni dati" le conserva. I file eventualmente presenti nel vecchio percorso vengono spostati automaticamente al primo avvio.
 
@@ -200,7 +206,7 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 - **Strategie – sovrapposizioni**: aggiunta per ogni strategia una nota "Relazione con le altre". In sintesi: *Media Mobile*, *Decimazione Temporale* e *Purge Semplice* sono casi particolari di *Purge Adattivo* (stesso motore `flatten`/`purge`); *Picco per Bucket*, *Rimozione Anomalie* e *Deduplica Valori* sono invece indipendenti e complementari.
 
 ### 2.3.2
-- **Fix PostgreSQL/MariaDB**: le query eseguivano `PRAGMA busy_timeout` (istruzione solo-SQLite) su qualsiasi backend, causando `syntax error at or near "PRAGMA"` su PostgreSQL. Ora la PRAGMA viene applicata solo su SQLite. *(Nota: il supporto PostgreSQL/MariaDB resta incompleto — vedi README.)*
+- **Fix PostgreSQL/MariaDB**: le query eseguivano `PRAGMA busy_timeout` (istruzione solo-SQLite) su qualsiasi backend, causando `syntax error at or near "PRAGMA"` su PostgreSQL. Ora la PRAGMA viene applicata solo su SQLite. *(Il supporto PostgreSQL/MariaDB è stato poi completato nella 2.7.0.)*
 
 ### 2.3.1
 - **Feedback UI**: quando il caricamento dei dati di una pagina fallisce (es. Dashboard o Dettaglio sensore) ora compare un banner d'errore persistente con pulsante "Riprova", invece di un toast che sparisce dopo pochi secondi lasciando spinner o trattini a schermo.
