@@ -196,6 +196,9 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.2.2
+- **Pulizia**: rimosse le righe `DEBUG:` temporanee in `run.sh` (dump di `db_type`/`db_path`/`db_url`/`db_host`/`db_name` ad ogni avvio) usate per diagnosticare il problema di lettura delle opzioni.
+
 ### 2.2.1
 - **Fix critico**: il rilevamento dello schema classificava come "transitional" (e quindi rifiutava l'avvio) ogni database HA moderno in cui la colonna `states.entity_id` è ancora presente. HA mantiene quella colonna vestigiale nullable anche dopo la migrazione a `states_meta`, quindi la sua presenza è normale. Ora lo schema è "modern" quando esistono `states_meta` e `states.metadata_id`, indipendentemente da `states.entity_id`.
 
