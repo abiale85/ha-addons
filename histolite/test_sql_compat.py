@@ -19,6 +19,12 @@ CORPUS = [
     "SELECT MIN(CAST(s.state AS REAL)) AS obs_min FROM states s WHERE s.metadata_id = ? "
     "AND s.state NOT IN ('unknown','unavailable','') AND typeof(CAST(s.state AS REAL)) = 'real'",
     "CAST(last_updated_ts / 3600 AS INTEGER) * 3600",
+    # Bucket a dimensione arbitraria (Purge Adattivo / Picco per Bucket).
+    "SELECT state_id, CAST(last_updated_ts / 900 AS INTEGER) * 900 AS bucket, state, "
+    "last_updated_ts AS ts FROM states WHERE metadata_id = ? AND last_updated_ts < ? "
+    "ORDER BY last_updated_ts ASC, state_id ASC",
+    # Bucket-key della deduplica periodica (senza il fattore di ricomposizione).
+    "CAST(last_updated_ts / 604800 AS INTEGER)",
     "SELECT state_id FROM states s WHERE s.metadata_id = ? AND datetime(last_updated) < "
     "datetime('now', '-30 days') LIMIT ?",
     "UPDATE states SET state = ? WHERE state_id = ?",
@@ -51,6 +57,12 @@ def test_pg_translations_shape():
 
     pg2 = translate_sql("CAST(last_updated_ts / 86400 AS INTEGER) * 86400", "postgresql")
     assert pg2 == "FLOOR(last_updated_ts / 86400) * 86400"
+
+    # Bucket arbitrari: stessa regola, denominatore qualsiasi.
+    assert translate_sql("CAST(last_updated_ts / 900 AS INTEGER) * 900", "postgresql") \
+        == "FLOOR(last_updated_ts / 900) * 900"
+    assert translate_sql("CAST(last_updated_ts / 604800 AS INTEGER)", "mariadb") \
+        == "FLOOR(last_updated_ts / 604800)"
 
     pg3 = translate_sql("WHERE typeof(CAST(state AS REAL)) = 'real'", "postgresql")
     assert "typeof" not in pg3 and "::text ~ '" in pg3

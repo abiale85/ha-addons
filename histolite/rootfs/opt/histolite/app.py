@@ -139,8 +139,13 @@ def _record_strategy_result(strategy_id: str, result: dict | None, error: str | 
         ok, summary = False, str(result["error"])
     else:
         deleted = result.get("total_deleted", 0)
+        attr = result.get("total_attr_removed", 0)
         dur = result.get("duration_sec")
-        summary = f"{deleted} record eliminati" + (f" in {dur}s" if dur is not None else "")
+        summary = f"{deleted} record eliminati"
+        if attr:
+            summary += f" + {attr} attributi orfani"
+        if dur is not None:
+            summary += f" in {dur}s"
         ok = True
     with _running_strategy_lock:
         _last_strategy_result = {

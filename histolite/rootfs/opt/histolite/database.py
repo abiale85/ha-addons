@@ -10,7 +10,10 @@ import sqlite3
 import os
 import logging
 import json
+import math
+import statistics
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -18,6 +21,123 @@ from urllib.parse import urlparse
 from sql_compat import CompatConnection, db_error_types
 
 logger = logging.getLogger(__name__)
+
+# Stati non numerici che non devono entrare nei calcoli di aggregazione.
+_NON_NUMERIC_STATES = frozenset({"unknown", "unavailable", ""})
+
+# Funzioni di aggregazione supportate per l'appiattimento dei bucket.
+AGG_FUNCS = (
+    "time_weighted_mean", "mean", "median", "mode",
+    "min", "max", "first", "last", "percentile",
+)
+
+
+def _resolve_bucket_seconds(bucket_seconds, granularity, default: int) -> int:
+    """Risolve la dimensione del bucket in secondi.
+
+    Priorità: ``bucket_seconds`` esplicito → ``granularity`` legacy
+    ("hour"/"day") → ``default``.
+    """
+    if bucket_seconds is not None:
+        try:
+            bs = int(bucket_seconds)
+            if bs > 0:
+                return bs
+        except (TypeError, ValueError):
+            pass
+    if granularity == "day":
+        return 86400
+    if granularity == "hour":
+        return 3600
+    return int(default)
+
+
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_num(x: float) -> str:
+    """Formatta un numero come fa il resto del codice: 4 decimali, senza zeri finali."""
+    return f"{x:.4f}".rstrip("0").rstrip(".") or "0"
+
+
+def _percentile(sorted_vals: list[float], pct: float):
+    n = len(sorted_vals)
+    if n == 0:
+        return None
+    if n == 1:
+        return sorted_vals[0]
+    k = (n - 1) * (max(0.0, min(100.0, pct)) / 100.0)
+    lo = math.floor(k)
+    hi = math.ceil(k)
+    if lo == hi:
+        return sorted_vals[int(k)]
+    return sorted_vals[lo] * (hi - k) + sorted_vals[hi] * (k - lo)
+
+
+def _aggregate_bucket(rows: list[dict], agg: str, agg_pct: float = 95.0):
+    """Calcola il valore rappresentativo di un bucket.
+
+    ``rows``: lista ordinata di ``{"state": str, "ts": float | None}``.
+    Ritorna la stringa da scrivere sul record tenuto, oppure ``None`` se non
+    calcolabile (in tal caso il chiamante lascia invariato il valore originale).
+    """
+    if not rows:
+        return None
+    if agg == "first":
+        return rows[0]["state"]
+    if agg == "last":
+        return rows[-1]["state"]
+    if agg == "mode":
+        counter: Counter = Counter()
+        first_seen: dict = {}
+        for i, r in enumerate(rows):
+            st = r["state"]
+            if st is None or st in _NON_NUMERIC_STATES:
+                continue
+            counter[st] += 1
+            first_seen.setdefault(st, i)
+        if not counter:
+            return None
+        # più frequente; a parità vince chi è comparso prima
+        return max(counter.items(), key=lambda kv: (kv[1], -first_seen[kv[0]]))[0]
+
+    # Aggregazioni numeriche: si considerano solo i campioni convertibili.
+    nums = [(v, r.get("ts")) for r in rows if (v := _to_float(r["state"])) is not None]
+    if not nums:
+        return None
+    vals = [v for v, _ in nums]
+    if agg == "min":
+        return _fmt_num(min(vals))
+    if agg == "max":
+        return _fmt_num(max(vals))
+    if agg == "mean":
+        return _fmt_num(sum(vals) / len(vals))
+    if agg == "median":
+        return _fmt_num(statistics.median(vals))
+    if agg == "percentile":
+        return _fmt_num(_percentile(sorted(vals), agg_pct))
+    if agg == "time_weighted_mean":
+        if len(nums) == 1:
+            return _fmt_num(nums[0][0])
+        acc = 0.0
+        total_w = 0.0
+        for i, (v, ts) in enumerate(nums):
+            nxt_ts = nums[i + 1][1] if i + 1 < len(nums) else None
+            if ts is not None and nxt_ts is not None:
+                w = nxt_ts - ts
+                if w <= 0:
+                    w = 1.0
+            else:
+                w = 1.0
+            acc += v * w
+            total_w += w
+        return _fmt_num(acc / total_w if total_w > 0 else sum(vals) / len(vals))
+    # agg sconosciuta → media semplice
+    return _fmt_num(sum(vals) / len(vals))
 
 
 class UnsupportedDatabaseError(RuntimeError):
@@ -880,8 +1000,41 @@ class HaDatabase:
                 
             except self._db_errors as e:
                 logger.warning(f"get_sensor_value_range {entity_id}: {e}")
-        
+
         return result
+
+    def get_exclusive_attributes_count(self, entity_id: str) -> int:
+        """Righe ``state_attributes`` referenziate SOLO da questa entità.
+
+        È il massimo che la rimozione totale della storia di questo sensore
+        potrebbe liberare in ``state_attributes`` (le righe condivise con altri
+        sensori non vengono toccate). Timeout: 5 sec.
+        """
+        use_meta = self._use_meta_schema()
+        col = "metadata_id" if use_meta else "entity_id"
+        with self._connect(read_only=True) as conn:
+            self._set_busy_timeout(conn, 5000)
+            try:
+                if use_meta:
+                    key = self._get_metadata_id(conn, entity_id)
+                    if key is None:
+                        return 0
+                else:
+                    key = entity_id
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM state_attributes "
+                    f"WHERE attributes_id IN "
+                    f"  (SELECT DISTINCT attributes_id FROM states "
+                    f"   WHERE {col} = ? AND attributes_id IS NOT NULL) "
+                    f"AND attributes_id NOT IN "
+                    f"  (SELECT DISTINCT attributes_id FROM states "
+                    f"   WHERE {col} <> ? AND attributes_id IS NOT NULL)",
+                    (key, key),
+                ).fetchone()
+                return int(row["c"]) if row and row["c"] is not None else 0
+            except self._db_errors as e:
+                logger.warning(f"get_exclusive_attributes_count {entity_id}: {e}")
+                return 0
 
 
     # ------------------------------------------------------------------
@@ -894,10 +1047,12 @@ class HaDatabase:
         older_than_days: int,
         dry_run: bool = False,
         batch_size: int = 5000,
+        cleanup_attributes: bool = True,
     ) -> dict:
         """
         Elimina tutti i record di un'entità più vecchi di N giorni.
-        Restituisce statistiche sull'operazione.
+        Restituisce statistiche sull'operazione. Con ``cleanup_attributes``
+        rimuove anche le righe ``state_attributes`` rimaste orfane.
         """
         self._validate_schema_for_write()
         schema = self.get_schema_info()
@@ -925,22 +1080,42 @@ class HaDatabase:
             self._log_query(count_query, time.time() - start_t, c_qid)
             total_to_delete = count_row["c"] if count_row else 0
 
+            # where senza alias "s." per le query su state_attributes
+            id_filter_na = id_filter.replace("s.", "")
+            cond_na = cond.replace("s.", "")
+            scope_where = f"{id_filter_na} AND {cond_na}"
+            scope_params = [id_param] + ([param] if param is not None else [])
+
             if dry_run or total_to_delete == 0:
-                return {"deleted": 0, "estimated": total_to_delete, "dry_run": dry_run}
+                attr_estimated = 0
+                if cleanup_attributes and total_to_delete:
+                    cand = {
+                        r["attributes_id"]
+                        for r in conn.execute(
+                            f"SELECT DISTINCT attributes_id FROM states WHERE {scope_where}",
+                            scope_params,
+                        ).fetchall()
+                    }
+                    attr_estimated = self._estimate_orphan_attributes(
+                        conn, cand, scope_where, scope_params
+                    )
+                return {"deleted": 0, "estimated": total_to_delete,
+                        "attr_estimated": attr_estimated, "dry_run": dry_run}
 
             deleted = 0
+            touched_attr: set = set()
             start_op = time.time()
             while True:
                 if schema["uses_ts"]:
                     ids = conn.execute(
-                        f"SELECT state_id FROM states s "
+                        f"SELECT state_id, attributes_id FROM states s "
                         f"WHERE {id_filter} AND last_updated_ts < ? "
                         f"LIMIT ?",
                         (id_param, param, batch_size),
                     ).fetchall()
                 else:
                     ids = conn.execute(
-                        f"SELECT state_id FROM states s "
+                        f"SELECT state_id, attributes_id FROM states s "
                         f"WHERE {id_filter} AND datetime(last_updated) < "
                         f"datetime('now', '-{older_than_days} days') "
                         f"LIMIT ?",
@@ -949,6 +1124,10 @@ class HaDatabase:
 
                 if not ids:
                     break
+                if cleanup_attributes:
+                    touched_attr.update(
+                        r["attributes_id"] for r in ids if r["attributes_id"] is not None
+                    )
                 id_list = [r["state_id"] for r in ids]
                 placeholders = ",".join("?" * len(id_list))
                 # time the cleanup/update and delete statements
@@ -971,29 +1150,243 @@ class HaDatabase:
                 import time as _sys_time
                 _sys_time.sleep(0.5)
 
-            return {"deleted": deleted, "estimated": total_to_delete, "dry_run": False}
+            attr_deleted = (
+                self._purge_orphan_attributes(conn, touched_attr)
+                if cleanup_attributes and touched_attr else 0
+            )
+            return {"deleted": deleted, "estimated": total_to_delete,
+                    "attr_deleted": attr_deleted, "dry_run": False}
+
+    # ------------------------------------------------------------------
+    # state_attributes: pulizia mirata degli orfani
+    # ------------------------------------------------------------------
+
+    def _purge_orphan_attributes(self, conn, attr_ids) -> int:
+        """Elimina da ``state_attributes`` SOLO le righe con id in ``attr_ids``
+        che, dopo le cancellazioni appena fatte, non sono più referenziate da
+        alcuna riga di ``states``.
+
+        Query circoscritta agli id passati (niente anti-join globale sull'intera
+        tabella): pensata per girare al termine di ogni strategia.
+        """
+        cand = sorted({a for a in attr_ids if a is not None})
+        if not cand:
+            return 0
+        removed = 0
+        for i in range(0, len(cand), 500):
+            chunk = cand[i:i + 500]
+            ph = ",".join("?" * len(chunk))
+            try:
+                still = {
+                    r["attributes_id"]
+                    for r in conn.execute(
+                        f"SELECT DISTINCT attributes_id FROM states "
+                        f"WHERE attributes_id IN ({ph})",
+                        chunk,
+                    ).fetchall()
+                }
+            except self._db_errors as e:
+                logger.warning(f"_purge_orphan_attributes (lookup): {e}")
+                return removed
+            orphan = [a for a in chunk if a not in still]
+            if not orphan:
+                continue
+            ph2 = ",".join("?" * len(orphan))
+            try:
+                conn.execute(
+                    f"DELETE FROM state_attributes WHERE attributes_id IN ({ph2})",
+                    orphan,
+                )
+                conn.commit()
+            except self._db_errors as e:
+                logger.warning(f"_purge_orphan_attributes (delete): {e}")
+                return removed
+            removed += len(orphan)
+        if removed:
+            logger.info(f"[OrphanAttributes] rimosse {removed} righe state_attributes orfane")
+        return removed
+
+    def _estimate_orphan_attributes(
+        self, conn, candidate_ids, in_scope_where: str, in_scope_params
+    ) -> int:
+        """Stima quante delle ``candidate_ids`` resterebbero orfane: quelle non
+        più referenziate da righe di ``states`` FUORI dallo scope di cancellazione
+        (``NOT (in_scope_where)``). Usata nei dry-run."""
+        cand = sorted({a for a in candidate_ids if a is not None})
+        if not cand:
+            return 0
+        ph = ",".join("?" * len(cand))
+        sql = (
+            f"SELECT DISTINCT attributes_id FROM states "
+            f"WHERE attributes_id IN ({ph}) AND NOT ({in_scope_where})"
+        )
+        try:
+            rows = conn.execute(sql, list(cand) + list(in_scope_params)).fetchall()
+        except self._db_errors as e:
+            logger.warning(f"_estimate_orphan_attributes: {e}")
+            return 0
+        outside = {r["attributes_id"] for r in rows}
+        return len(set(cand) - outside)
 
     # ------------------------------------------------------------------
     # Operazioni di flatten (appiattimento)
     # ------------------------------------------------------------------
 
+    def _decimate_by_bucket(
+        self,
+        conn,
+        *,
+        where_clause: str,
+        params: tuple,
+        ts_col: str,
+        uses_ts: bool,
+        bucket_expr: str,
+        agg: str,
+        agg_pct: float,
+        extra_keep_ids: set,
+        dry_run: bool,
+        batch_size: int,
+        cleanup_attributes: bool = True,
+    ) -> dict:
+        """Motore comune di decimazione per bucket.
+
+        Tiene il PRIMO record di ogni bucket (più i ``extra_keep_ids``), gli
+        assegna il valore aggregato secondo ``agg`` ed elimina gli altri.
+        L'aggregazione è calcolata in Python così da supportare in modo uniforme
+        anche mediana/moda/percentile su SQLite, PostgreSQL e MariaDB.
+
+        Se ``cleanup_attributes`` elimina anche le righe di ``state_attributes``
+        rimaste orfane per effetto delle cancellazioni (o le stima, in dry-run).
+        """
+        fetch_sql = (
+            f"SELECT state_id, {bucket_expr} AS bucket, state, {ts_col} AS ts, attributes_id "
+            f"FROM states WHERE {where_clause} ORDER BY {ts_col} ASC, state_id ASC"
+        )
+        t0 = time.time()
+        qid = self._log_query_start(fetch_sql, params)
+        all_rows = conn.execute(fetch_sql, params).fetchall()
+        self._log_query(fetch_sql, time.time() - t0, qid)
+
+        total_records = len(all_rows)
+        if total_records == 0:
+            return {"total_records": 0, "buckets": 0, "estimated_deleted": 0,
+                    "deleted": 0, "dry_run": dry_run}
+
+        buckets: dict = {}
+        for r in all_rows:
+            buckets.setdefault(r["bucket"], []).append(r)
+
+        keep_ids: set = set()
+        updates: list = []
+        for rows in buckets.values():
+            keep_id = rows[0]["state_id"]
+            keep_ids.add(keep_id)
+            if len(rows) > 1:
+                agg_rows = [
+                    {"state": rr["state"], "ts": (rr["ts"] if uses_ts else None)}
+                    for rr in rows
+                ]
+                new_val = _aggregate_bucket(agg_rows, agg, agg_pct)
+                if new_val is not None and str(new_val) != str(rows[0]["state"]):
+                    updates.append((str(new_val), keep_id))
+
+        all_keep_ids = keep_ids | (extra_keep_ids or set())
+        delete_set = {r["state_id"] for r in all_rows if r["state_id"] not in all_keep_ids}
+        to_delete_ids = [sid for sid in (r["state_id"] for r in all_rows) if sid in delete_set]
+        estimated_deleted = len(to_delete_ids)
+
+        # attributes_id referenziati SOLO dalle righe che stiamo per cancellare
+        del_attr = set()
+        if cleanup_attributes:
+            touched = {r["attributes_id"] for r in all_rows if r["state_id"] in delete_set}
+            kept_attr = {r["attributes_id"] for r in all_rows if r["state_id"] not in delete_set}
+            del_attr = {a for a in (touched - kept_attr) if a is not None}
+
+        if dry_run:
+            # Nessuna chiave "deleted" in dry-run: i chiamati usano
+            # r.get("deleted", r.get("estimated_deleted", 0)).
+            attr_estimated = (
+                self._estimate_orphan_attributes(conn, del_attr, where_clause, params)
+                if del_attr else 0
+            )
+            return {
+                "total_records": total_records,
+                "buckets": len(buckets),
+                "estimated_deleted": estimated_deleted,
+                "attr_estimated": attr_estimated,
+                "dry_run": True,
+            }
+
+        if updates:
+            try:
+                conn.executemany("UPDATE states SET state = ? WHERE state_id = ?", updates)
+                conn.commit()
+                logger.info(f"[DecimateProgress] updated={len(updates)} valori (agg={agg})")
+            except Exception as e:
+                logger.warning(f"Errore executemany aggiornamento stato (agg={agg}): {e}")
+
+        deleted = 0
+        start_op = time.time()
+        for i in range(0, len(to_delete_ids), batch_size):
+            chunk = to_delete_ids[i:i + batch_size]
+            ph = ",".join("?" * len(chunk))
+            t_batch = time.time()
+            fb_qid = self._log_query_start(f"decimate batch ({len(chunk)})", chunk)
+            conn.execute(
+                f"UPDATE states SET old_state_id = NULL WHERE old_state_id IN ({ph})",
+                chunk,
+            )
+            conn.execute(f"DELETE FROM states WHERE state_id IN ({ph})", chunk)
+            conn.commit()
+            self._log_query(f"decimate batch ({len(chunk)})", time.time() - t_batch, fb_qid)
+            deleted += len(chunk)
+            logger.info(
+                f"[DecimateProgress] deleted_total={deleted}/{len(to_delete_ids)} "
+                f"elapsed_s={time.time() - start_op:.2f}"
+            )
+            time.sleep(0.5)
+
+        attr_deleted = self._purge_orphan_attributes(conn, del_attr) if del_attr else 0
+
+        return {
+            "total_records": total_records,
+            "buckets": len(buckets),
+            "estimated_deleted": estimated_deleted,
+            "deleted": deleted,
+            "attr_deleted": attr_deleted,
+            "dry_run": False,
+        }
+
     def flatten_entity(
         self,
         entity_id: str,
         older_than_days: int,
-        granularity: str = "hour",  # "hour" o "day"
+        granularity: str | None = None,  # "hour"/"day" legacy — vedi bucket_seconds
         dry_run: bool = False,
         batch_size: int = 5000,
+        bucket_seconds: int | None = None,
+        agg: str = "time_weighted_mean",
+        agg_pct: float = 95.0,
+        cleanup_attributes: bool = True,
     ) -> dict:
         """
-        Appiattisce la storia di un'entità: per ogni bucket temporale
-        mantiene un solo record con la media dei valori.
+        Appiattisce la storia di un'entità: per ogni bucket temporale mantiene
+        un solo record, con valore calcolato secondo ``agg``
+        (time_weighted_mean | mean | median | mode | min | max | first | last | percentile).
+
+        La dimensione del bucket è ``bucket_seconds`` (default 3600); il vecchio
+        parametro ``granularity`` ("hour"/"day") è ancora accettato.
+        Con ``cleanup_attributes`` rimuove anche le righe ``state_attributes``
+        rimaste orfane.
         """
-        logger.debug(f"[flatten_entity] inizio: entity_id={entity_id}, older_than_days={older_than_days}, granularity={granularity}, dry_run={dry_run}")
+        bucket_seconds = _resolve_bucket_seconds(bucket_seconds, granularity, 3600)
+        logger.debug(
+            f"[flatten_entity] inizio: entity_id={entity_id}, older_than_days={older_than_days}, "
+            f"bucket_seconds={bucket_seconds}, agg={agg}, dry_run={dry_run}"
+        )
         self._validate_schema_for_write()
         schema = self.get_schema_info()
         use_meta = self._use_meta_schema()
-        logger.debug(f"[flatten_entity] schema: uses_ts={schema.get('uses_ts')}, use_meta={use_meta}")
 
         with self._connect(read_only=dry_run) as conn:
             if use_meta:
@@ -1006,174 +1399,43 @@ class HaDatabase:
                 id_filter = "entity_id = ?"
                 id_param = entity_id
 
-            # Formato bucket in SQL
             if schema["uses_ts"]:
-                import time
                 cutoff = time.time() - older_than_days * 86400
-                if granularity == "hour":
-                    bucket_expr = "CAST(last_updated_ts / 3600 AS INTEGER) * 3600"
-                else:
-                    bucket_expr = "CAST(last_updated_ts / 86400 AS INTEGER) * 86400"
+                ts_col = "last_updated_ts"
+                bucket_expr = (
+                    f"CAST(last_updated_ts / {int(bucket_seconds)} AS INTEGER) * {int(bucket_seconds)}"
+                )
                 where_clause = f"{id_filter} AND last_updated_ts < ?"
                 base_params = (id_param, cutoff)
             else:
-                if granularity == "hour":
-                    bucket_expr = "strftime('%Y-%m-%d %H', last_updated)"
-                else:
-                    bucket_expr = "strftime('%Y-%m-%d', last_updated)"
-                cutoff = None
+                # Percorso legacy (colonna testuale): bucket arbitrari non
+                # traducibili → si approssima a ora/giorno.
+                ts_col = "last_updated"
+                bucket_expr = (
+                    "strftime('%Y-%m-%d %H', last_updated)"
+                    if bucket_seconds < 86400
+                    else "strftime('%Y-%m-%d', last_updated)"
+                )
                 where_clause = (
                     f"{id_filter} AND datetime(last_updated) < "
-                    f"datetime('now', '-{older_than_days} days')"
+                    f"datetime('now', '-{int(older_than_days)} days')"
                 )
                 base_params = (id_param,)
 
-            count_query = f"SELECT COUNT(*) AS c FROM states WHERE {where_clause}"
-            
-            # Media pesata nel tempo, mantenendo 1 solo record per bucket
-            # - Il PRIMO record (più vecchio) del bucket viene aggiornato con la media pesata
-            # - Tutti gli altri record nel mezzo e alla fine vengono cancellati
-            # - Questo raggiunge uno stato stabile: a regime rimane 1 record/ora
-            bucket_query = f"""
-                WITH windowed AS (
-                    SELECT
-                        {bucket_expr} AS bucket,
-                        state_id,
-                        last_updated_ts,
-                        state,
-                        CAST(state AS REAL) AS numeric_value,
-                        LEAD(last_updated_ts) OVER (
-                            ORDER BY last_updated_ts ASC, state_id ASC
-                        ) AS next_ts,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY {bucket_expr}
-                            ORDER BY last_updated_ts ASC, state_id ASC
-                        ) AS rn,
-                        COUNT(*) OVER (PARTITION BY {bucket_expr}) AS cnt
-                    FROM states
-                    WHERE {where_clause}
-                ),
-                durations AS (
-                    SELECT
-                        bucket,
-                        state_id,
-                        state,
-                        numeric_value,
-                        rn,
-                        cnt,
-                        COALESCE(next_ts - last_updated_ts, 1) AS duration_sec,
-                        CASE
-                            WHEN state NOT IN ('unknown','unavailable','')
-                                 AND numeric_value IS NOT NULL
-                            THEN numeric_value * COALESCE(next_ts - last_updated_ts, 1)
-                            ELSE 0
-                        END AS value_weighted
-                    FROM windowed
-                )
-                SELECT
-                    bucket,
-                    MIN(CASE WHEN rn = 1 THEN state_id ELSE NULL END) AS keep_id_first,
-                    COUNT(*) AS bucket_count,
-                    CASE 
-                        WHEN SUM(CASE 
-                                    WHEN state NOT IN ('unknown','unavailable','')
-                                         AND numeric_value IS NOT NULL
-                                    THEN duration_sec
-                                    ELSE 0
-                                END) > 0
-                        THEN SUM(value_weighted) / (SUM(CASE
-                                                        WHEN state NOT IN ('unknown','unavailable','')
-                                                             AND numeric_value IS NOT NULL
-                                                        THEN duration_sec
-                                                        ELSE 0
-                                                    END) * 1.0)
-                        ELSE NULL
-                    END AS avg_value
-                FROM durations
-                GROUP BY bucket
-            """
-
-            t0 = time.time()
-            c_qid = self._log_query_start(count_query, base_params[:2])
-            count_row = conn.execute(count_query, base_params[:2]).fetchone()
-            self._log_query(count_query, time.time() - t0, c_qid)
-            total_records = count_row["c"] if count_row else 0
-            t1 = time.time()
-            b_qid = self._log_query_start(bucket_query, base_params)
-            buckets = conn.execute(bucket_query, base_params).fetchall()
-            self._log_query(bucket_query, time.time() - t1, b_qid)
-            # Manteniamo 1 record per bucket, quindi eliminiamo count-1
-            estimated_deleted = sum(max(0, b["bucket_count"] - 1) for b in buckets)
-
-            if dry_run:
-                return {
-                    "total_records": total_records,
-                    "buckets": len(buckets),
-                    "estimated_deleted": estimated_deleted,
-                    "dry_run": True,
-                }
-
-            t_ids = time.time()
-            id_qid = self._log_query_start("SELECT all state_ids", base_params[:2])
-            all_rows = conn.execute(f"SELECT state_id FROM states WHERE {where_clause}", base_params[:2]).fetchall()
-            self._log_query("SELECT all state_ids", time.time() - t_ids, id_qid)
-
-            # Mantieni il primo e l'ultimo record di ogni bucket (per continuità temporale)
-            # Aggiorna il primo record con la media pesata
-            all_keep_ids = set()
-            updates = []
-            for b in buckets:
-                if b["keep_id_first"]:
-                    all_keep_ids.add(b["keep_id_first"])
-                
-                # Aggiorna SOLO il primo record del bucket con la media pesata
-                if b["bucket_count"] > 1 and b["avg_value"] is not None and b["keep_id_first"]:
-                    avg_str = f"{b['avg_value']:.4f}".rstrip("0").rstrip(".")
-                    updates.append((avg_str, b["keep_id_first"]))
-
-            if updates:
-                try:
-                    conn.executemany("UPDATE states SET state = ? WHERE state_id = ?", updates)
-                    conn.commit()
-                    logger.info(f"[FlattenProgress] entity={entity_id} updated={len(updates)} first-record values con media")
-                except Exception as e:
-                    logger.warning(f"Errore executemany aggiornamento stato: {e}")
-
-            to_delete_ids = [r["state_id"] for r in all_rows if r["state_id"] not in all_keep_ids]
-
-            deleted = 0
-            start_op = time.time()
-            for i in range(0, len(to_delete_ids), batch_size):
-                chunk = to_delete_ids[i:i+batch_size]
-                ph = ",".join("?" * len(chunk))
-                
-                t_batch = time.time()
-                fb_qid = self._log_query_start(f"flatten batch ({len(chunk)})", chunk)
-                conn.execute(
-                    f"UPDATE states SET old_state_id = NULL WHERE old_state_id IN ({ph})",
-                    chunk,
-                )
-                conn.execute(
-                    f"DELETE FROM states WHERE state_id IN ({ph})", chunk
-                )
-                conn.commit()
-                self._log_query(f"flatten batch ({len(chunk)})", time.time() - t_batch, fb_qid)
-                
-                deleted += len(chunk)
-                elapsed = time.time() - start_op
-                logger.info(f"[FlattenProgress] entity={entity_id} deleted_total={deleted}/{len(to_delete_ids)} elapsed_s={elapsed:.2f}")
-                
-                import time as _sys_time
-                _sys_time.sleep(0.5)
-
-            conn.commit()
-            result = {
-                "total_records": total_records,
-                "buckets": len(buckets),
-                "estimated_deleted": estimated_deleted,
-                "deleted": deleted,
-                "dry_run": False,
-            }
+            result = self._decimate_by_bucket(
+                conn,
+                where_clause=where_clause,
+                params=base_params,
+                ts_col=ts_col,
+                uses_ts=schema["uses_ts"],
+                bucket_expr=bucket_expr,
+                agg=agg,
+                agg_pct=agg_pct,
+                extra_keep_ids=set(),
+                dry_run=dry_run,
+                batch_size=batch_size,
+                cleanup_attributes=cleanup_attributes,
+            )
             logger.debug(f"[flatten_entity] completato per {entity_id}: {result}")
             return result
 
@@ -1181,21 +1443,31 @@ class HaDatabase:
         self,
         entity_id: str,
         older_than_days: int,
-        granularity: str = "hour",
+        granularity: str | None = "hour",
         keep_resets: bool = True,
         reset_threshold_pct: float = 50.0,
         dry_run: bool = False,
         batch_size: int = 5000,
+        bucket_seconds: int | None = None,
+        agg: str = "max",
+        agg_pct: float = 95.0,
+        cleanup_attributes: bool = True,
     ) -> dict:
         """
         Decima la storia di un sensore a crescita continua (contatori energia, acqua…)
-        mantenendo il VALORE MASSIMO per ogni bucket temporale invece della media.
+        mantenendo per ogni bucket temporale il valore aggregato secondo ``agg``
+        (default ``max`` — il picco del periodo).
 
-        - Preserva il picco di ogni periodo → non distorce le letture cumulative
+        - Con ``agg="max"`` preserva il picco di ogni periodo → non distorce le
+          letture cumulative
         - Rileva i reset automaticamente (calo > reset_threshold_pct%) e conserva
           il punto immediatamente PRIMA e DOPO il reset
         - I bucket con un solo record vengono lasciati invariati
+        - La dimensione del bucket è ``bucket_seconds`` (default 3600); il vecchio
+          ``granularity`` ("hour"/"day") è ancora accettato
         """
+        bucket_seconds = _resolve_bucket_seconds(bucket_seconds, granularity, 3600)
+        agg = (agg or "max").lower()
         self._validate_schema_for_write()
         schema = self.get_schema_info()
         use_meta = self._use_meta_schema()
@@ -1218,9 +1490,7 @@ class HaDatabase:
                 cutoff = _time.time() - older_than_days * 86400
                 ts_col = "last_updated_ts"
                 bucket_expr = (
-                    "CAST(last_updated_ts / 3600 AS INTEGER) * 3600"
-                    if granularity == "hour"
-                    else "CAST(last_updated_ts / 86400 AS INTEGER) * 86400"
+                    f"CAST(last_updated_ts / {int(bucket_seconds)} AS INTEGER) * {int(bucket_seconds)}"
                 )
                 where_clause = f"{id_filter} AND last_updated_ts < ?"
                 base_params: tuple = (id_param, cutoff)
@@ -1229,12 +1499,12 @@ class HaDatabase:
                 cutoff = None
                 bucket_expr = (
                     "strftime('%Y-%m-%d %H', last_updated)"
-                    if granularity == "hour"
+                    if bucket_seconds < 86400
                     else "strftime('%Y-%m-%d', last_updated)"
                 )
                 where_clause = (
                     f"{id_filter} AND datetime(last_updated) < "
-                    f"datetime('now', '-{older_than_days} days')"
+                    f"datetime('now', '-{int(older_than_days)} days')"
                 )
                 base_params = (id_param,)
 
@@ -1253,29 +1523,33 @@ class HaDatabase:
             # ── Fase 1: trova MAX valore per bucket ──────────────────────
             # Usiamo window function ROW_NUMBER per selezionare il record col valore più alto
             # Fallback: se il sensore non è numerico, teniamo MIN(state_id) per bucket
-            bucket_query = f"""
-                SELECT state_id, bucket, bucket_count FROM (
-                    SELECT
-                        state_id,
-                        {bucket_expr} AS bucket,
-                        COUNT(*) OVER (PARTITION BY {bucket_expr}) AS bucket_count,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY {bucket_expr}
-                            ORDER BY
-                                CASE WHEN state NOT IN ('unknown','unavailable','')
-                                     THEN COALESCE(CAST(state AS REAL), -1e18) ELSE -1e18 END DESC,
-                                state_id DESC
-                        ) AS rn
-                    FROM states
-                    WHERE {where_clause}
-                ) t WHERE rn = 1
-            """
-            t1 = time.time()
-            bq_id = self._log_query_start(bucket_query, base_params)
-            keep_rows = conn.execute(bucket_query, base_params).fetchall()
-            self._log_query(bucket_query, time.time() - t1, bq_id)
-            keep_ids: set = {r["state_id"] for r in keep_rows}
-            num_buckets = len(keep_rows)
+            # Solo per agg="max": le altre aggregazioni passano da _decimate_by_bucket.
+            keep_ids: set = set()
+            num_buckets = 0
+            if agg == "max":
+                bucket_query = f"""
+                    SELECT state_id, bucket, bucket_count FROM (
+                        SELECT
+                            state_id,
+                            {bucket_expr} AS bucket,
+                            COUNT(*) OVER (PARTITION BY {bucket_expr}) AS bucket_count,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY {bucket_expr}
+                                ORDER BY
+                                    CASE WHEN state NOT IN ('unknown','unavailable','')
+                                         THEN COALESCE(CAST(state AS REAL), -1e18) ELSE -1e18 END DESC,
+                                    state_id DESC
+                            ) AS rn
+                        FROM states
+                        WHERE {where_clause}
+                    ) t WHERE rn = 1
+                """
+                t1 = time.time()
+                bq_id = self._log_query_start(bucket_query, base_params)
+                keep_rows = conn.execute(bucket_query, base_params).fetchall()
+                self._log_query(bucket_query, time.time() - t1, bq_id)
+                keep_ids = {r["state_id"] for r in keep_rows}
+                num_buckets = len(keep_rows)
 
             # ── Fase 2: reset detection ──────────────────────────────────
             reset_keep_ids: set = set()
@@ -1306,27 +1580,61 @@ class HaDatabase:
                             reset_keep_ids.add(curr_id)
                     prev_id, prev_val = curr_id, curr_val
 
+            # Aggregazioni diverse da "max": motore comune di decimazione,
+            # con i punti di reset tenuti come keep-id aggiuntivi.
+            if agg != "max":
+                res = self._decimate_by_bucket(
+                    conn,
+                    where_clause=where_clause,
+                    params=base_params,
+                    ts_col=ts_col,
+                    uses_ts=schema["uses_ts"],
+                    bucket_expr=bucket_expr,
+                    agg=agg,
+                    agg_pct=agg_pct,
+                    extra_keep_ids=reset_keep_ids,
+                    dry_run=dry_run,
+                    batch_size=batch_size,
+                    cleanup_attributes=cleanup_attributes,
+                )
+                res["reset_points"] = len(reset_keep_ids)
+                return res
+
             all_keep_ids = keep_ids | reset_keep_ids
-            estimated_deleted = total_records - len(all_keep_ids)
+
+            # Elenco (state_id, attributes_id) dell'intero scope: serve sia per
+            # calcolare le cancellazioni sia per gli orfani di state_attributes.
+            t_ids = time.time()
+            id_qid = self._log_query_start("SELECT all state_ids", base_params)
+            all_ids_rows = conn.execute(
+                f"SELECT state_id, attributes_id FROM states WHERE {where_clause}", base_params
+            ).fetchall()
+            self._log_query("SELECT all state_ids", time.time() - t_ids, id_qid)
+
+            to_delete_ids = [r["state_id"] for r in all_ids_rows if r["state_id"] not in all_keep_ids]
+            estimated_deleted = len(to_delete_ids)
+
+            del_attr = set()
+            if cleanup_attributes:
+                delete_set = set(to_delete_ids)
+                touched = {r["attributes_id"] for r in all_ids_rows if r["state_id"] in delete_set}
+                kept_attr = {r["attributes_id"] for r in all_ids_rows if r["state_id"] not in delete_set}
+                del_attr = {a for a in (touched - kept_attr) if a is not None}
 
             if dry_run:
                 return {
                     "total_records": total_records,
                     "buckets": num_buckets,
                     "estimated_deleted": max(0, estimated_deleted),
+                    "attr_estimated": (
+                        self._estimate_orphan_attributes(conn, del_attr, where_clause, base_params)
+                        if del_attr else 0
+                    ),
                     "reset_points": len(reset_keep_ids),
                     "dry_run": True,
                 }
 
             # ── Fase 3: elimina in batch tutto tranne all_keep_ids ───────
-            # Query all state_ids to find which ones to delete
-            t_ids = time.time()
-            id_qid = self._log_query_start("SELECT all state_ids", base_params)
-            all_ids_rows = conn.execute(f"SELECT state_id FROM states WHERE {where_clause}", base_params).fetchall()
-            self._log_query("SELECT all state_ids", time.time() - t_ids, id_qid)
-            
-            to_delete_ids = [r["state_id"] for r in all_ids_rows if r["state_id"] not in all_keep_ids]
-
             deleted = 0
             start_op = time.time()
             for i in range(0, len(to_delete_ids), batch_size):
@@ -1352,11 +1660,14 @@ class HaDatabase:
                 import time as _sys_time
                 _sys_time.sleep(0.5)
 
+            attr_deleted = self._purge_orphan_attributes(conn, del_attr) if del_attr else 0
+
             return {
                 "total_records": total_records,
                 "buckets": num_buckets,
                 "estimated_deleted": estimated_deleted,
                 "deleted": deleted,
+                "attr_deleted": attr_deleted,
                 "reset_points": len(reset_keep_ids),
                 "dry_run": False,
             }
@@ -1367,28 +1678,64 @@ class HaDatabase:
         older_than_days: int,
         dry_run: bool = False,
         batch_size: int = 5000,
+        keep_interval_seconds: int = 86400,
+        cleanup_attributes: bool = True,
     ) -> dict:
         """
         Elimina sequenze di valori uguali mantenendo il record più vecchio.
-        Se il valore resta identico su giorni diversi, conserva al massimo 1 record al giorno.
+
+        Con ``keep_interval_seconds`` > 0 preserva comunque almeno un record per
+        ogni fascia temporale di quella durata, anche se il valore non cambia
+        (default 86400 = uno al giorno, comportamento storico). Con
+        ``keep_interval_seconds == 0`` la deduplica è pura: resta solo il primo
+        record di ogni sequenza identica, per quanto lunga.
+
+        Con ``cleanup_attributes`` rimuove anche le righe ``state_attributes``
+        rimaste orfane.
         """
         self._validate_schema_for_write()
         schema = self.get_schema_info()
         use_meta = self._use_meta_schema()
 
+        try:
+            keep_interval_seconds = max(0, int(keep_interval_seconds))
+        except (TypeError, ValueError):
+            keep_interval_seconds = 86400
+
         if schema["uses_ts"]:
             import time as _time
 
             ts_order_expr = "last_updated_ts"
-            day_expr = "date(datetime(last_updated_ts, 'unixepoch'))"
             cutoff = _time.time() - older_than_days * 86400
             where_clause = "last_updated_ts < ?"
             base_params = (cutoff,)
+            if keep_interval_seconds > 0:
+                bucket_expr = f"CAST(last_updated_ts / {int(keep_interval_seconds)} AS INTEGER)"
+            else:
+                bucket_expr = None
         else:
             ts_order_expr = "datetime(last_updated)"
-            day_expr = "date(last_updated)"
-            where_clause = f"datetime(last_updated) < datetime('now', '-{older_than_days} days')"
+            where_clause = f"datetime(last_updated) < datetime('now', '-{int(older_than_days)} days')"
             base_params = ()
+            if keep_interval_seconds <= 0:
+                bucket_expr = None
+            elif keep_interval_seconds == 3600:
+                bucket_expr = "strftime('%Y-%m-%d %H', last_updated)"
+            else:
+                # Percorso legacy: intervalli arbitrari non traducibili → giorno.
+                bucket_expr = "date(last_updated)"
+
+        if bucket_expr is not None:
+            bucket_cols = (
+                f",\n                        {bucket_expr} AS bucket_key,\n"
+                f"                        LAG({bucket_expr}) OVER (\n"
+                f"                            ORDER BY {ts_order_expr} ASC, state_id ASC\n"
+                f"                        ) AS prev_bucket_key"
+            )
+            bucket_cond = "AND bucket_key = prev_bucket_key"
+        else:
+            bucket_cols = ""
+            bucket_cond = ""
 
         with self._connect(read_only=dry_run) as conn:
             if use_meta:
@@ -1410,13 +1757,9 @@ class HaDatabase:
                         state_id,
                         state,
                         {ts_order_expr} AS order_ts,
-                        {day_expr} AS day_key,
                         LAG(state) OVER (
                             ORDER BY {ts_order_expr} ASC, state_id ASC
-                        ) AS prev_state,
-                        LAG({day_expr}) OVER (
-                            ORDER BY {ts_order_expr} ASC, state_id ASC
-                        ) AS prev_day_key
+                        ) AS prev_state{bucket_cols}
                     FROM states
                     WHERE {full_where_clause}
                 )
@@ -1424,7 +1767,25 @@ class HaDatabase:
                 FROM ordered
                 WHERE prev_state IS NOT NULL
                   AND state = prev_state
-                  AND day_key = prev_day_key
+                  {bucket_cond}
+            """
+
+            # Sottoquery riusabile: gli state_id che verrebbero cancellati (senza LIMIT).
+            to_delete_sq = f"""
+                WITH ordered AS (
+                    SELECT
+                        state_id,
+                        state,
+                        {ts_order_expr} AS order_ts,
+                        LAG(state) OVER (
+                            ORDER BY {ts_order_expr} ASC, state_id ASC
+                        ) AS prev_state{bucket_cols}
+                    FROM states
+                    WHERE {full_where_clause}
+                )
+                SELECT state_id FROM ordered
+                WHERE prev_state IS NOT NULL AND state = prev_state
+                  {bucket_cond}
             """
 
             start_t = time.time()
@@ -1434,9 +1795,34 @@ class HaDatabase:
             total_to_delete = count_row["c"] if count_row else 0
 
             if dry_run or total_to_delete == 0:
-                return {"total_records": total_to_delete, "estimated_deleted": total_to_delete, "deleted": 0, "dry_run": dry_run}
+                attr_estimated = 0
+                if cleanup_attributes and total_to_delete:
+                    cand = sorted({
+                        r["attributes_id"]
+                        for r in conn.execute(
+                            f"SELECT DISTINCT attributes_id FROM states "
+                            f"WHERE state_id IN ({to_delete_sq})",
+                            query_params,
+                        ).fetchall()
+                        if r["attributes_id"] is not None
+                    })
+                    if cand:
+                        ph = ",".join("?" * len(cand))
+                        surv = {
+                            r["attributes_id"]
+                            for r in conn.execute(
+                                f"SELECT DISTINCT attributes_id FROM states "
+                                f"WHERE attributes_id IN ({ph}) "
+                                f"AND state_id NOT IN ({to_delete_sq})",
+                                list(cand) + list(query_params),
+                            ).fetchall()
+                        }
+                        attr_estimated = len(cand) - len(surv)
+                return {"total_records": total_to_delete, "estimated_deleted": total_to_delete,
+                        "deleted": 0, "attr_estimated": attr_estimated, "dry_run": dry_run}
 
             deleted = 0
+            touched_attr: set = set()
             start_op = time.time()
             while True:
                 select_query = f"""
@@ -1445,13 +1831,9 @@ class HaDatabase:
                             state_id,
                             state,
                             {ts_order_expr} AS order_ts,
-                            {day_expr} AS day_key,
                             LAG(state) OVER (
                                 ORDER BY {ts_order_expr} ASC, state_id ASC
-                            ) AS prev_state,
-                            LAG({day_expr}) OVER (
-                                ORDER BY {ts_order_expr} ASC, state_id ASC
-                            ) AS prev_day_key
+                            ) AS prev_state{bucket_cols}
                         FROM states
                         WHERE {full_where_clause}
                     )
@@ -1459,7 +1841,7 @@ class HaDatabase:
                     FROM ordered
                     WHERE prev_state IS NOT NULL
                       AND state = prev_state
-                      AND day_key = prev_day_key
+                      {bucket_cond}
                     ORDER BY order_ts ASC, state_id ASC
                     LIMIT ?
                 """
@@ -1473,6 +1855,16 @@ class HaDatabase:
 
                 id_list = [r["state_id"] for r in rows]
                 placeholders = ",".join("?" * len(id_list))
+                if cleanup_attributes:
+                    touched_attr.update(
+                        r["attributes_id"]
+                        for r in conn.execute(
+                            f"SELECT DISTINCT attributes_id FROM states "
+                            f"WHERE state_id IN ({placeholders})",
+                            id_list,
+                        ).fetchall()
+                        if r["attributes_id"] is not None
+                    )
                 t_batch = time.time()
                 db_qid = self._log_query_start(f"deduplicate batch ({len(id_list)})", id_list)
                 conn.execute(
@@ -1493,10 +1885,15 @@ class HaDatabase:
                 import time as _sys_time
                 _sys_time.sleep(0.5)
 
+            attr_deleted = (
+                self._purge_orphan_attributes(conn, touched_attr)
+                if cleanup_attributes and touched_attr else 0
+            )
             return {
                 "total_records": total_to_delete,
                 "estimated_deleted": total_to_delete,
                 "deleted": deleted,
+                "attr_deleted": attr_deleted,
                 "dry_run": False,
             }
 
@@ -1865,14 +2262,25 @@ class HaDatabase:
                 count_row = conn.execute(count_q, params).fetchone()
                 count = count_row["c"] if count_row else 0
                 samples = [dict(r) for r in conn.execute(query, params).fetchall()[:20]]
-                return {"count": count, "samples": samples}
+                attr_estimated = 0
+                if count:
+                    cand = {
+                        r["attributes_id"]
+                        for r in conn.execute(
+                            f"SELECT DISTINCT attributes_id FROM states WHERE {where}", params
+                        ).fetchall()
+                    }
+                    attr_estimated = self._estimate_orphan_attributes(conn, cand, where, params)
+                return {"count": count, "samples": samples, "attr_estimated": attr_estimated}
             except self._db_errors as e:
                 if "timeout" in str(e).lower():
                     return {"count": -1, "samples": [], "error": "Timeout - usa filtri più restrittivi"}
                 raise
 
-    def delete_anomalies(self, entity_id: str, criteria: dict, batch_size: int = 5000) -> dict:
-        """Elimina i record anomali secondo i criteri dati. Ritorna conteggio eliminati."""
+    def delete_anomalies(self, entity_id: str, criteria: dict, batch_size: int = 5000,
+                         cleanup_attributes: bool = True) -> dict:
+        """Elimina i record anomali secondo i criteri dati. Ritorna conteggio eliminati.
+        Con ``cleanup_attributes`` rimuove anche le righe ``state_attributes`` orfane."""
         self._validate_schema_for_write()
         conditions, params = self._build_anomaly_conditions(entity_id, criteria)
         if not conditions:
@@ -1898,16 +2306,21 @@ class HaDatabase:
             self._log_query(f"COUNT anomalies", time.time() - t0, c_qid)
 
             deleted = 0
+            touched_attr: set = set()
             while True:
                 tq = time.time()
                 sq_id = self._log_query_start(f"select anomaly ids limit {batch_size}", params + [batch_size])
                 ids = conn.execute(
-                    f"SELECT state_id FROM states WHERE {where} LIMIT ?",
+                    f"SELECT state_id, attributes_id FROM states WHERE {where} LIMIT ?",
                     params + [batch_size],
                 ).fetchall()
                 self._log_query(f"select anomaly ids limit {batch_size}", time.time() - tq, sq_id)
                 if not ids:
                     break
+                if cleanup_attributes:
+                    touched_attr.update(
+                        r["attributes_id"] for r in ids if r["attributes_id"] is not None
+                    )
                 id_list = [r["state_id"] for r in ids]
                 ph = ",".join("?" * len(id_list))
                 t_b = time.time()
@@ -1925,8 +2338,12 @@ class HaDatabase:
                 if len(id_list) < batch_size:
                     break
 
+            attr_deleted = (
+                self._purge_orphan_attributes(conn, touched_attr)
+                if cleanup_attributes and touched_attr else 0
+            )
             logger.info(f"delete_anomalies {entity_id}: {deleted}/{total} eliminati")
-            return {"deleted": deleted, "total_found": total}
+            return {"deleted": deleted, "total_found": total, "attr_deleted": attr_deleted}
 
     def _build_anomaly_conditions(self, entity_id: str, criteria: dict):
         """Helper: costruisce WHERE conditions per anomalie."""

@@ -98,19 +98,42 @@ Veloce e aggressivo. Consigliato per sensori con storia non necessaria.
 ---
 
 ### 2. Purge Adattivo
-Gestione **multi-fascia** completamente personalizzabile, in un unico passaggio:
-- < Soglia 1: mantieni tutto
-- Soglia 1 → Soglia 2: appiattimento orario (il record tenuto assume la media pesata del bucket)
-- Soglia 2 → Soglia 3: appiattimento giornaliero
-- > Soglia 3: eliminazione completa
+Gestione a **fasce multiple** completamente personalizzabile, in un unico passaggio.
+Il numero di fasce è libero. Ogni fascia parte da un'età in giorni (`after_days`) e
+sceglie cosa fare dei dati **più vecchi** di quella soglia:
 
-Offre il massimo controllo sulla storicità in funzione dell'età del dato. Impostando una sola fascia equivale a una media mobile oraria/giornaliera; con due fasce a una decimazione temporale.
+- **Appiattisci**: tiene 1 record per *bucket* temporale. Il bucket è configurabile —
+  ogni X **minuti / ore / giorni / settimane** — e il valore del record tenuto è
+  calcolato con l'**aggregazione** scelta.
+- **Elimina**: cancella completamente i record della fascia.
 
-**Esempio:** con soglie 7 / 30 / 365 giorni:
+Ciò che è più recente della prima fascia resta intatto.
+
+**Aggregazioni disponibili (per fascia, e anche per il Picco per Bucket):**
+
+| Aggregazione | Valore tenuto nel bucket |
+|--------------|--------------------------|
+| Media pesata sul tempo | media dei valori pesata per la durata di ciascuno (default) |
+| Media | media aritmetica semplice |
+| Mediana | valore centrale |
+| Moda | valore più frequente (funziona anche su stati testuali) |
+| Minimo / Massimo | valore minimo / massimo del bucket |
+| Primo / Ultimo | il valore del primo / ultimo record del bucket, invariato |
+| Percentile | percentile configurabile (es. 95) — utile per ignorare i picchi anomali |
+
+> Le aggregazioni numeriche saltano i bucket senza valori numerici, lasciando
+> invariato il primo record. *Moda*, *Primo* e *Ultimo* funzionano anche su sensori
+> testuali.
+
+**Esempio:** 4 fasce
 - dati 0–7 giorni: tutti i record
-- dati 7–30 giorni: 1 record/ora, con valore medio del bucket
-- dati 30–365 giorni: 1 record/giorno
+- dati 7–30 giorni: 1 record ogni 15 minuti, media pesata sul tempo
+- dati 30–90 giorni: 1 record al giorno, mediana
 - dati > 365 giorni: eliminati
+
+> Le strategie `adaptive_purge` salvate con le vecchie soglie
+> `threshold_1/2/3_days` continuano a funzionare: vengono convertite
+> automaticamente nelle fasce equivalenti (appiattimento orario, poi giornaliero).
 
 ---
 
@@ -181,12 +204,40 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 - **Database supportati**: SQLite, PostgreSQL e MariaDB. TimescaleDB usa lo stesso backend PostgreSQL senza una configurazione separata.
 - **Compatibilità schema**: richiede lo schema moderno di Home Assistant, con `states_meta` e `metadata_id`, e rifiuta il supporto per i vecchi schemi legacy o in migrazione.
 - **Concorrenza**: per SQLite usa WAL mode con checkpoint automatico ogni 500 pagine; per PostgreSQL/MariaDB il backend delega la gestione delle transazioni al motore SQL.
-- **Sicurezza referenziale**: l'operazione di flatten e delete aggiorna i riferimenti `old_state_id` prima di eliminare le righe per evitare dangling references.
+- **Sicurezza referenziale**: l'operazione di flatten e delete aggiorna i riferimenti `old_state_id` prima di eliminare le righe per evitare dangling references. Le righe di `state_attributes` rimaste senza riferimenti vengono ripulite dalla strategia stessa (solo quelle toccate); lo strumento *Pulizia attributi orfani* del Dashboard resta utile per gli orfani lasciati da altre fonti o da versioni precedenti.
 - **Persistenza**: strategie salvate, cronologia job e cache stanno nel volume privato dell'add-on (`/data/histolite`). Disinstallando **con** "rimuovi dati" vengono cancellate; disinstallando **senza**, restano e si ritrovano al reinstall. La **configurazione del database** (backend, URL/host…) è invece un'*opzione* dell'add-on gestita dal Supervisor: per conservarla tra disinstallazioni serve un backup di Home Assistant.
 
 ---
 
 ## Changelog
+
+### 2.8.0
+- **Purge Adattivo – fasce generiche**: le tre soglie fisse (orario / giornaliero /
+  eliminazione) sono sostituite da un elenco di fasce di lunghezza libera. Ogni
+  fascia sceglie *dopo N giorni* se **appiattire** (con bucket e aggregazione
+  propri) o **eliminare**. Le strategie salvate col vecchio schema
+  `threshold_1/2/3_days` vengono migrate automaticamente alle fasce equivalenti.
+- **Bucket a dimensione arbitraria**: Purge Adattivo e Picco per Bucket non sono
+  più limitati a "ora" / "giorno" — si può scegliere *ogni X minuti / ore / giorni
+  / settimane*.
+- **Aggregazione scelta**: come si collassa un bucket è configurabile — media
+  pesata sul tempo (default del Purge Adattivo), media, mediana, moda, min, max,
+  primo, ultimo, percentile. Il Picco per Bucket resta su *massimo* di default ma
+  accetta le stesse alternative.
+- **Deduplica Valori – preservazione periodica**: oltre a rimuovere i duplicati
+  consecutivi, si imposta *preserva almeno 1 valore ogni …* (default: 1 al giorno,
+  come prima; `0` = deduplica pura senza preservazione periodica).
+- Motore di decimazione unificato (`_decimate_by_bucket`): mediana, moda e
+  percentile sono calcolati lato applicazione, quindi funzionano identici su
+  SQLite, PostgreSQL e MariaDB.
+- **Pulizia `state_attributes` integrata**: ogni strategia, al termine, elimina
+  anche le righe di `state_attributes` rimaste orfane *per effetto delle proprie
+  cancellazioni* (query circoscritta agli `attributes_id` toccati, non l'anti-join
+  globale; gli attributi condivisi con altri sensori non vengono toccati).
+  Attivo di default, disattivabile con la casella *"Elimina anche le righe
+  state_attributes rimaste orfane"*. Anteprime e risultati mostrano il conteggio
+  (stimato / reale). Il dettaglio sensore indica quante righe `state_attributes`
+  sono usate **solo** da quel sensore.
 
 ### 2.7.0
 - **PostgreSQL / MariaDB funzionanti**: il layer query era scritto solo per SQLite (placeholder `?`, `datetime()/strftime()/unixepoch`, `CAST(... AS REAL)` permissivo, `typeof()`, dimensione DB dal file, `VACUUM`). Aggiunto un modulo di compatibilità (`sql_compat`) che traduce le query al dialetto del backend, restituisce righe come dizionari e adatta placeholder ed errori. Ora dashboard, dettaglio sensore, modifica storia e tutte le strategie girano anche su PostgreSQL/TimescaleDB e MariaDB.

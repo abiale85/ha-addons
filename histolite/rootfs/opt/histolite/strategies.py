@@ -11,6 +11,151 @@ from database import HaDatabase
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Helper parametri: intervalli temporali e aggregazioni
+# ---------------------------------------------------------------------------
+
+_UNIT_SECONDS = {
+    "minute": 60, "minutes": 60, "min": 60, "m": 60,
+    "hour": 3600, "hours": 3600, "h": 3600,
+    "day": 86400, "days": 86400, "d": 86400,
+    "week": 604800, "weeks": 604800, "w": 604800,
+}
+
+# Funzioni di aggregazione esposte all'utente per l'appiattimento dei bucket.
+AGG_CHOICES = (
+    "time_weighted_mean", "mean", "median", "mode",
+    "min", "max", "first", "last", "percentile",
+)
+
+
+def parse_interval_to_seconds(spec, default_seconds: int) -> int:
+    """Converte una specifica di intervallo in secondi.
+
+    Accetta: ``{"every": N, "unit": "minute|hour|day|week"}``, un intero/float
+    di secondi, le stringhe legacy ``"hour"``/``"day"``, oppure ``None``.
+    ``every`` <= 0 restituisce 0 (= funzionalità disattivata).
+    """
+    if spec is None:
+        return int(default_seconds)
+    if isinstance(spec, bool):  # evita che True/False passino come int
+        return int(default_seconds)
+    if isinstance(spec, (int, float)):
+        return int(spec) if spec > 0 else 0
+    if isinstance(spec, str):
+        s = spec.strip().lower()
+        if s in ("hour", "hourly", "ora", "oraria"):
+            return 3600
+        if s in ("day", "daily", "giorno", "giornaliera"):
+            return 86400
+        if s.isdigit():
+            return int(s)
+        return int(default_seconds)
+    if isinstance(spec, dict):
+        every = spec.get("every", spec.get("value", 1))
+        unit = str(spec.get("unit", "hour")).lower()
+        try:
+            every = float(every)
+        except (TypeError, ValueError):
+            return int(default_seconds)
+        if every <= 0:
+            return 0
+        return int(round(every * _UNIT_SECONDS.get(unit, 3600)))
+    return int(default_seconds)
+
+
+def normalize_agg(params: dict, default: str = "time_weighted_mean") -> tuple[str, float]:
+    """Estrae ``(agg, agg_pct)`` validati da un dizionario di parametri."""
+    agg = str(params.get("agg", default) or default).lower()
+    if agg not in AGG_CHOICES:
+        agg = default
+    try:
+        pct = float(params.get("agg_pct", 95) or 95)
+    except (TypeError, ValueError):
+        pct = 95.0
+    return agg, min(100.0, max(0.0, pct))
+
+
+def normalize_tiers(params: dict) -> list[dict]:
+    """Normalizza le fasce del Purge Adattivo.
+
+    Se ``params['tiers']`` è presente lo usa; altrimenti migra i vecchi
+    parametri ``threshold_1_days``/``threshold_2_days``/``threshold_3_days``
+    (+ ``threshold_4_days``) all'equivalente in fasce, replicando le condizioni
+    del motore storico.
+    """
+    raw = params.get("tiers")
+    tiers: list[dict] = []
+
+    if isinstance(raw, list) and raw:
+        for t in raw:
+            if not isinstance(t, dict):
+                continue
+            after_raw = t.get("after_days")
+            try:
+                after = int(after_raw)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            action = str(t.get("action", "flatten")).lower()
+            if action not in ("flatten", "delete"):
+                action = "flatten"
+            entry = {"after_days": after, "action": action}
+            if action == "flatten":
+                entry["bucket_seconds"] = parse_interval_to_seconds(t.get("bucket"), 3600) or 3600
+                entry["agg"], entry["agg_pct"] = normalize_agg(t)
+            tiers.append(entry)
+    else:
+        def _int(v):
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+
+        t1, t2 = _int(params.get("threshold_1_days")), _int(params.get("threshold_2_days"))
+        t3, t4 = _int(params.get("threshold_3_days")), _int(params.get("threshold_4_days"))
+        if t1 is not None and t2 is not None and t2 > t1:
+            tiers.append({"after_days": t1, "action": "flatten",
+                          "bucket_seconds": 3600, "agg": "time_weighted_mean", "agg_pct": 95.0})
+        if t2 is not None and t3 is not None and t3 > t2:
+            tiers.append({"after_days": t2, "action": "flatten",
+                          "bucket_seconds": 86400, "agg": "time_weighted_mean", "agg_pct": 95.0})
+        if t4 is not None and t3 is not None and t3 < t4 < 36500:
+            tiers.append({"after_days": t4, "action": "delete"})
+        elif t4 is None and t3 is not None:
+            tiers.append({"after_days": t3, "action": "delete"})
+
+    tiers.sort(key=lambda x: x["after_days"])
+    return tiers
+
+
+def _bucket_label(seconds: int) -> str:
+    """Etichetta breve in italiano per una dimensione di bucket."""
+    if seconds % 604800 == 0 and seconds >= 604800:
+        n = seconds // 604800
+        return "Settimanale" if n == 1 else f"Ogni {n} settimane"
+    if seconds % 86400 == 0 and seconds >= 86400:
+        n = seconds // 86400
+        return "Giornaliero" if n == 1 else f"Ogni {n} giorni"
+    if seconds % 3600 == 0 and seconds >= 3600:
+        n = seconds // 3600
+        return "Orario" if n == 1 else f"Ogni {n} ore"
+    n = max(1, seconds // 60)
+    return f"Ogni {n} min"
+
+
+def cleanup_attributes_enabled(params: dict) -> bool:
+    """``cleanup_attributes`` è attivo per default; solo un valore falso lo disattiva."""
+    return params.get("cleanup_attributes", True) is not False
+
+
+def _attr_count(r: dict) -> int:
+    """Righe state_attributes toccate da un risultato (reali o stimate)."""
+    try:
+        return int(r.get("attr_deleted", r.get("attr_estimated", 0)) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _run_with_retry(strategy_label: str, entity_id: str, operation, retry_attempts: int = 2, retry_delay_sec: float = 1.0):
     """Esegue un'operazione su una singola entità con retry limitati."""
     attempts = max(1, int(retry_attempts))
@@ -69,6 +214,7 @@ class SimplePurge(Strategy):
 
     def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 30))
+        cleanup_attributes = cleanup_attributes_enabled(params)
         retry_attempts = int(params.get("retry_attempts", 2))
         retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
         results = []
@@ -80,7 +226,10 @@ class SimplePurge(Strategy):
                 r = _run_with_retry(
                     "SimplePurge",
                     eid,
-                    lambda attempt: db.purge_entity(eid, older_than_days, dry_run=dry_run, batch_size=batch_size),
+                    lambda attempt: db.purge_entity(
+                        eid, older_than_days, dry_run=dry_run, batch_size=batch_size,
+                        cleanup_attributes=cleanup_attributes,
+                    ),
                     retry_attempts=retry_attempts,
                     retry_delay_sec=retry_delay_sec,
                 )
@@ -99,6 +248,7 @@ class SimplePurge(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total_deleted,
+            "total_attr_removed": sum(_attr_count(r) for r in results),
             "details": results,
         }
 
@@ -109,28 +259,38 @@ class SimplePurge(Strategy):
 
 class AdaptivePurge(Strategy):
     """
-    Purge intelligente multi-fascia:
-    - < soglia_1 giorni: mantieni tutto
-    - soglia_1 ~ soglia_2 giorni: 1 record/ora
-    - > soglia_2 giorni: 1 record/giorno
-    - > soglia_3 giorni: elimina completamente
-    Offre il massimo controllo sulla storicità.
+    Purge intelligente a fasce multiple, in un unico passaggio.
+
+    Ogni fascia parte da un'età in giorni (``after_days``) e sceglie cosa fare
+    dei dati più vecchi di quella soglia:
+    - ``flatten``: 1 record per bucket temporale (``bucket``: ogni X minuti/ore/
+      giorni/settimane), col valore calcolato dall'aggregazione scelta (``agg``:
+      media pesata sul tempo, media, mediana, moda, min, max, primo, ultimo,
+      percentile);
+    - ``delete``: eliminazione completa.
+    Numero di fasce libero; ciò che è più recente della prima fascia è intatto.
     """
     name = "adaptive_purge"
     label = "Purge Adattivo"
     description = (
-        "Purge multi-fascia: mantieni tutto < soglia_1 giorni, "
-        "appiattisci progressivamente, elimina completamente > soglia_3 giorni."
+        "Purge a fasce multiple: numero di fasce libero, bucket configurabile "
+        "(ogni X minuti/ore/giorni/settimane) e aggregazione scelta per fascia."
     )
 
     def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
-        threshold_1 = int(params.get("threshold_1_days", 7))    # tutto
-        threshold_2 = int(params.get("threshold_2_days", 30))   # orario
-        threshold_3 = int(params.get("threshold_3_days", 90))   # giornaliero
-        threshold_4 = int(params.get("threshold_4_days", 365))  # eliminazione
+        tiers = normalize_tiers(params)
+        cleanup_attributes = cleanup_attributes_enabled(params)
         retry_attempts = int(params.get("retry_attempts", 2))
         retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
         results = []
+
+        if not tiers:
+            return {
+                "strategy": self.name, "dry_run": dry_run, "params": params,
+                "entity_count": len(entity_ids), "total_deleted": 0,
+                "error": "Nessuna fascia valida configurata", "details": [],
+            }
+
         for eid in entity_ids:
             if cancel_event and cancel_event.is_set():
                 logger.info(f"[AdaptivePurge] Cancellazione richiesta, interrotto a {eid}")
@@ -139,34 +299,38 @@ class AdaptivePurge(Strategy):
                 def _op(_attempt: int):
                     entity_result = {"entity_id": eid, "phases": []}
                     total_deleted = 0
-
-                    if threshold_2 > threshold_1:
-                        r = db.flatten_entity(
-                            eid, threshold_1, granularity="hour",
-                            dry_run=dry_run, batch_size=batch_size
-                        )
-                        d = r.get("deleted", r.get("estimated_deleted", 0))
+                    total_attr = 0
+                    for tier in tiers:
+                        after = tier["after_days"]
+                        if tier["action"] == "delete":
+                            r = db.purge_entity(
+                                eid, after, dry_run=dry_run, batch_size=batch_size,
+                                cleanup_attributes=cleanup_attributes,
+                            )
+                            d = r.get("estimated", 0) if dry_run else r.get("deleted", 0)
+                            label = f"Eliminazione (>{after}gg)"
+                        else:
+                            r = db.flatten_entity(
+                                eid, after,
+                                bucket_seconds=tier["bucket_seconds"],
+                                agg=tier["agg"], agg_pct=tier["agg_pct"],
+                                dry_run=dry_run, batch_size=batch_size,
+                                cleanup_attributes=cleanup_attributes,
+                            )
+                            d = r.get("estimated_deleted", 0) if dry_run else r.get("deleted", 0)
+                            label = (
+                                f"{_bucket_label(tier['bucket_seconds'])} · "
+                                f"{tier['agg']} (>{after}gg)"
+                            )
+                        a = _attr_count(r)
                         total_deleted += d
-                        entity_result["phases"].append({"label": f"Orario (>{threshold_1}gg)", "deleted": d})
-
-                    if threshold_3 > threshold_2:
-                        r = db.flatten_entity(
-                            eid, threshold_2, granularity="day",
-                            dry_run=dry_run, batch_size=batch_size
+                        total_attr += a
+                        entity_result["phases"].append(
+                            {"label": label, "deleted": d, "attr_removed": a}
                         )
-                        d = r.get("deleted", r.get("estimated_deleted", 0))
-                        total_deleted += d
-                        entity_result["phases"].append({"label": f"Giornaliero (>{threshold_2}gg)", "deleted": d})
-
-                    if threshold_4 > threshold_3:
-                        r = db.purge_entity(
-                            eid, threshold_4, dry_run=dry_run, batch_size=batch_size
-                        )
-                        d = r.get("deleted", r.get("estimated", 0))
-                        total_deleted += d
-                        entity_result["phases"].append({"label": f"Eliminazione (>{threshold_4}gg)", "deleted": d})
 
                     entity_result["total_deleted"] = total_deleted
+                    entity_result["attr_removed"] = total_attr
                     return entity_result
 
                 entity_result = _run_with_retry(
@@ -189,6 +353,7 @@ class AdaptivePurge(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total,
+            "total_attr_removed": sum(r.get("attr_removed", 0) for r in results),
             "details": results,
         }
 
@@ -219,6 +384,7 @@ class OutlierPurge(Strategy):
         max_value = params.get("max_value")
         std_mult = params.get("std_dev_multiplier")
         state_blacklist = params.get("state_blacklist", [])
+        cleanup_attributes = cleanup_attributes_enabled(params)
         retry_attempts = int(params.get("retry_attempts", 2))
         retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
 
@@ -250,13 +416,18 @@ class OutlierPurge(Strategy):
                         return {
                             "entity_id": eid,
                             "estimated": r.get("count", 0),
+                            "attr_estimated": r.get("attr_estimated", 0),
                             "samples": r.get("samples", []),
                             "dry_run": True,
                         }
-                    r = db.delete_anomalies(eid, criteria, batch_size=batch_size)
+                    r = db.delete_anomalies(
+                        eid, criteria, batch_size=batch_size,
+                        cleanup_attributes=cleanup_attributes,
+                    )
                     return {
                         "entity_id": eid,
                         "deleted": r.get("deleted", 0),
+                        "attr_deleted": r.get("attr_deleted", 0),
                         "total_found": r.get("total_found", 0),
                     }
 
@@ -282,6 +453,7 @@ class OutlierPurge(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total_deleted,
+            "total_attr_removed": sum(_attr_count(r) for r in results),
             "details": results,
         }
 
@@ -304,17 +476,25 @@ class PeakDecimation(Strategy):
     label = "Picco per Bucket (Contatori)"
     description = (
         "Per sensori in crescita continua (energia, gas, acqua…): "
-        "mantiene il valore MASSIMO per ogni bucket orario/giornaliero. "
-        "Rileva e preserva automaticamente i punti di reset."
+        "mantiene per ogni bucket (ogni X minuti/ore/giorni/settimane) il valore "
+        "aggregato scelto — di default il MASSIMO. Rileva e preserva i reset."
     )
 
     def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 7))
-        granularity = params.get("granularity", "hour")
+        if params.get("bucket") is not None:
+            bucket_seconds = parse_interval_to_seconds(params.get("bucket"), 3600)
+        else:
+            bucket_seconds = parse_interval_to_seconds(params.get("granularity"), 3600)
+        bucket_seconds = bucket_seconds or 3600
+        agg, agg_pct = normalize_agg(params, default="max")
+        cleanup_attributes = cleanup_attributes_enabled(params)
         keep_resets = bool(params.get("keep_resets", True))
         reset_threshold_pct = float(params.get("reset_threshold_pct", 50.0))
         retry_attempts = int(params.get("retry_attempts", 2))
         retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
+        # first/last/mode funzionano anche su sensori testuali; le altre no.
+        numeric_agg = agg not in ("first", "last", "mode")
         results = []
         for eid in entity_ids:
             if cancel_event and cancel_event.is_set():
@@ -322,21 +502,24 @@ class PeakDecimation(Strategy):
                 break
             try:
                 def _op(_attempt: int):
-                    stats = db.get_sensor_stats(eid)
-                    if stats and not stats.get("is_numeric", False):
-                        return {
-                            "entity_id": eid,
-                            "skipped": True,
-                            "reason": "Sensore non numerico - strategia inapplicabile",
-                        }
+                    if numeric_agg:
+                        stats = db.get_sensor_stats(eid)
+                        if stats and not stats.get("is_numeric", False):
+                            return {
+                                "entity_id": eid,
+                                "skipped": True,
+                                "reason": "Sensore non numerico - strategia inapplicabile",
+                            }
 
                     r = db.peak_decimate_entity(
                         eid, older_than_days,
-                        granularity=granularity,
+                        bucket_seconds=bucket_seconds,
+                        agg=agg, agg_pct=agg_pct,
                         keep_resets=keep_resets,
                         reset_threshold_pct=reset_threshold_pct,
                         dry_run=dry_run,
                         batch_size=batch_size,
+                        cleanup_attributes=cleanup_attributes,
                     )
                     r["entity_id"] = eid
                     return r
@@ -375,6 +558,7 @@ class PeakDecimation(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total_deleted,
+            "total_attr_removed": sum(_attr_count(r) for r in results if not r.get("skipped")),
             "details": results,
         }
 
@@ -393,11 +577,14 @@ class DeduplicateValues(Strategy):
     label = "Deduplica Valori"
     description = (
         "Rimuove duplicati consecutivi dello stesso valore, mantenendo il record più vecchio. "
-        "Se il valore non cambia per più giorni, lascia al massimo un record al giorno."
+        "Preserva comunque almeno un record per ogni intervallo di tempo configurato "
+        "(default: uno al giorno), anche se il valore non cambia."
     )
 
     def execute(self, db, entity_ids, params, dry_run=False, batch_size=5000, cancel_event=None):
         older_than_days = int(params.get("older_than_days", 7))
+        keep_interval_seconds = parse_interval_to_seconds(params.get("keep_interval"), 86400)
+        cleanup_attributes = cleanup_attributes_enabled(params)
         retry_attempts = int(params.get("retry_attempts", 2))
         retry_delay_sec = float(params.get("retry_delay_sec", 1.0))
         results = []
@@ -415,6 +602,8 @@ class DeduplicateValues(Strategy):
                         older_than_days,
                         dry_run=dry_run,
                         batch_size=batch_size,
+                        keep_interval_seconds=keep_interval_seconds,
+                        cleanup_attributes=cleanup_attributes,
                     ),
                     retry_attempts=retry_attempts,
                     retry_delay_sec=retry_delay_sec,
@@ -438,6 +627,7 @@ class DeduplicateValues(Strategy):
             "params": params,
             "entity_count": len(entity_ids),
             "total_deleted": total_deleted,
+            "total_attr_removed": sum(_attr_count(r) for r in results),
             "details": results,
         }
 
@@ -454,6 +644,15 @@ STRATEGY_REGISTRY = {
     DeduplicateValues.name: DeduplicateValues,
 }
 
+# Toggle condiviso da tutte le strategie: pulizia mirata delle righe
+# state_attributes rimaste orfane dopo le cancellazioni.
+_CLEANUP_ATTRS_PARAM = {
+    "key": "cleanup_attributes",
+    "label": "Elimina anche le righe state_attributes rimaste orfane",
+    "type": "boolean",
+    "default": True,
+}
+
 STRATEGY_LIST = [
     {
         "name": SimplePurge.name,
@@ -464,21 +663,23 @@ STRATEGY_LIST = [
         "params": [
             {"key": "older_than_days", "label": "Elimina record più vecchi di (giorni)",
              "type": "number", "default": 30, "min": 1},
+            _CLEANUP_ATTRS_PARAM,
         ],
     },
     {
         "name": AdaptivePurge.name,
         "label": AdaptivePurge.label,
         "description": AdaptivePurge.description,
-        "example": "Se vuoi tenere tutto all'inizio, poi ridurre a ore, poi a giorni e infine cancellare del tutto il molto vecchio.",
-        "overlap": "Strategia più completa: combina in un unico passaggio appiattimento orario, appiattimento giornaliero ed eliminazione finale. 'Purge Semplice' ne è il sottoinsieme con la sola eliminazione.",
+        "example": "4 fasce: 0–7gg tutto; 7–30gg 1 punto ogni 15 min (media pesata); 30–90gg 1 al giorno (mediana); >365gg eliminati.",
+        "overlap": "Strategia più completa: in un unico passaggio combina N fasce di appiattimento con bucket e aggregazione a scelta più l'eliminazione finale. 'Purge Semplice' ne è il sottoinsieme con la sola eliminazione.",
         "params": [
-            {"key": "threshold_1_days", "label": "Appiattimento orario dopo (giorni)",
-             "type": "number", "default": 7, "min": 1},
-            {"key": "threshold_2_days", "label": "Appiattimento giornaliero dopo (giorni)",
-             "type": "number", "default": 30, "min": 1},
-            {"key": "threshold_3_days", "label": "Eliminazione completa dopo (giorni)",
-             "type": "number", "default": 365, "min": 1},
+            {"key": "tiers", "label": "Fasce (dopo N giorni → appiattisci con bucket+aggregazione, oppure elimina)",
+             "type": "tiers", "default": [
+                 {"after_days": 7, "action": "flatten", "bucket": {"every": 1, "unit": "hour"}, "agg": "time_weighted_mean"},
+                 {"after_days": 30, "action": "flatten", "bucket": {"every": 1, "unit": "day"}, "agg": "time_weighted_mean"},
+                 {"after_days": 365, "action": "delete"},
+             ]},
+            _CLEANUP_ATTRS_PARAM,
         ],
     },
     {
@@ -498,34 +699,43 @@ STRATEGY_LIST = [
              "type": "number", "default": None, "min": 0.5, "optional": True},
             {"key": "state_blacklist", "label": "Stati da eliminare (es. unavailable, unknown)",
              "type": "list", "default": [], "optional": True},
+            _CLEANUP_ATTRS_PARAM,
         ],
     },
     {
         "name": PeakDecimation.name,
         "label": PeakDecimation.label,
         "description": PeakDecimation.description,
-        "example": "Per un contatore energia conserva il valore massimo di ogni ora o giorno, invece della media, e protegge i reset.",
-        "overlap": "Riduce come il 'Purge Adattivo' (1 record per bucket) ma tiene il valore MASSIMO invece della media e riconosce i reset: per i contatori cumulativi la media non ha senso.",
+        "example": "Per un contatore energia conserva il valore massimo (o mediana/percentile) di ogni ora, giorno o intervallo scelto, e protegge i reset.",
+        "overlap": "Come una fascia del 'Purge Adattivo' (1 record per bucket) ma con reset detection integrata: per i contatori cumulativi la media non ha senso, di default tiene il MASSIMO.",
         "params": [
             {"key": "older_than_days", "label": "Applica a dati più vecchi di (giorni)",
              "type": "number", "default": 7, "min": 1},
-            {"key": "granularity", "label": "Granularità bucket",
-             "type": "select", "options": ["hour", "day"], "default": "hour"},
+            {"key": "bucket", "label": "Dimensione bucket (ogni X min/ore/giorni/settimane)",
+             "type": "interval", "default": {"every": 1, "unit": "hour"}},
+            {"key": "agg", "label": "Aggregazione per bucket",
+             "type": "select", "options": list(AGG_CHOICES), "default": "max"},
+            {"key": "agg_pct", "label": "Percentile (se aggregazione = percentile)",
+             "type": "number", "default": 95, "min": 0, "max": 100, "optional": True},
             {"key": "keep_resets", "label": "Preserva punti di reset automaticamente",
              "type": "boolean", "default": True},
             {"key": "reset_threshold_pct", "label": "Soglia reset (% calo per rilevare reset)",
              "type": "number", "default": 50.0, "min": 5, "max": 99},
+            _CLEANUP_ATTRS_PARAM,
         ],
     },
     {
         "name": DeduplicateValues.name,
         "label": DeduplicateValues.label,
         "description": DeduplicateValues.description,
-        "example": "Se un sensore continua a pubblicare 21.3 con timestamp diversi, lascia il primo record della sequenza e, se continua per giorni, al massimo uno al giorno.",
+        "example": "Se un sensore continua a pubblicare 21.3 con timestamp diversi, lascia il primo record della sequenza e, se continua a lungo, almeno uno ogni intervallo scelto (es. 1 all'ora).",
         "overlap": "Nessuna sovrapposizione: non riduce la risoluzione né altera i valori, rimuove solo ripetizioni identiche consecutive. È quasi senza perdita e si combina bene con il 'Purge Adattivo'.",
         "params": [
             {"key": "older_than_days", "label": "Applica a dati più vecchi di (giorni)",
              "type": "number", "default": 7, "min": 1},
+            {"key": "keep_interval", "label": "Preserva almeno 1 valore ogni (0 = deduplica pura)",
+             "type": "interval", "default": {"every": 1, "unit": "day"}},
+            _CLEANUP_ATTRS_PARAM,
         ],
     },
 ]

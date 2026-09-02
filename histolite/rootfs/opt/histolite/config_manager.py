@@ -137,6 +137,7 @@ class ConfigManager:
             "dry_run": dry_run,
             "result": {
                 "total_deleted": result.get("total_deleted", 0),
+                "total_attr_removed": result.get("total_attr_removed", 0),
                 "entity_count": result.get("entity_count", 0),
                 "backup": result.get("backup"),
                 "error": result.get("error"),

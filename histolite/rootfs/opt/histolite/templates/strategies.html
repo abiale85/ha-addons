@@ -125,46 +125,41 @@
             </div>
             <!-- Params adaptive -->
             <div id="fp-adaptive" class="form-params d-none">
-              <div class="row g-2">
-                <div class="col-6 col-md-4">
-                  <label class="form-label small">Appiatt. orario dopo</label>
-                  <div class="input-group input-group-sm">
-                    <input type="number" class="form-control" id="fp-adp-t1" value="7" min="1">
-                    <span class="input-group-text">gg</span>
-                  </div>
-                </div>
-                <div class="col-6 col-md-4">
-                  <label class="form-label small">Appiatt. giorn. dopo</label>
-                  <div class="input-group input-group-sm">
-                    <input type="number" class="form-control" id="fp-adp-t2" value="30" min="1">
-                    <span class="input-group-text">gg</span>
-                  </div>
-                </div>
-                <div class="col-6 col-md-4">
-                  <label class="form-label small">Elimina dopo</label>
-                  <div class="input-group input-group-sm">
-                    <input type="number" class="form-control" id="fp-adp-t3" value="365" min="1">
-                    <span class="input-group-text">gg</span>
-                  </div>
-                </div>
+              <label class="form-label small">Fasce (dalla più recente alla più vecchia)</label>
+              <div id="fp-adp-tiers"></div>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="fp-adp-add-tier">
+                <i class="bi bi-plus me-1"></i>Aggiungi fascia
+              </button>
+              <div class="form-text">
+                Ogni fascia agisce sui dati più vecchi di N giorni: <em>appiattisci</em>
+                tiene 1 record per bucket col valore aggregato scelto, <em>elimina</em>
+                li cancella. Ciò che è più recente della prima fascia resta intatto.
               </div>
             </div>
             <!-- Params peak decimation -->
             <div id="fp-peak" class="form-params d-none">
               <div class="row g-2">
-                <div class="col-8">
+                <div class="col-12">
                   <label class="form-label small">Applica a dati più vecchi di</label>
                   <div class="input-group input-group-sm">
                     <input type="number" class="form-control" id="fp-peak-days" value="7" min="1">
                     <span class="input-group-text">giorni</span>
                   </div>
                 </div>
+                <div class="col-6">
+                  <label class="form-label small">Bucket ogni</label>
+                  <div class="input-group input-group-sm">
+                    <input type="number" class="form-control" id="fp-peak-every" value="1" min="1">
+                    <select class="form-select" id="fp-peak-unit"></select>
+                  </div>
+                </div>
                 <div class="col-4">
-                  <label class="form-label small">Granularità</label>
-                  <select class="form-select form-select-sm" id="fp-peak-gran">
-                    <option value="hour">Oraria</option>
-                    <option value="day">Giornaliera</option>
-                  </select>
+                  <label class="form-label small">Aggregazione</label>
+                  <select class="form-select form-select-sm" id="fp-peak-agg"></select>
+                </div>
+                <div class="col-2 d-none" id="fp-peak-pct-wrap">
+                  <label class="form-label small">%ile</label>
+                  <input type="number" class="form-control form-control-sm" id="fp-peak-pct" value="95" min="0" max="100">
                 </div>
                 <div class="col-12">
                   <div class="form-check">
@@ -184,16 +179,25 @@
             <!-- Params deduplica valori -->
             <div id="fp-dedup" class="form-params d-none">
               <div class="row g-2">
-                <div class="col-8">
+                <div class="col-6">
                   <label class="form-label small">Applica a dati più vecchi di</label>
                   <div class="input-group input-group-sm">
                     <input type="number" class="form-control" id="fp-dedup-days" value="7" min="1">
                     <span class="input-group-text">giorni</span>
                   </div>
                 </div>
+                <div class="col-6">
+                  <label class="form-label small">Preserva 1 valore ogni</label>
+                  <div class="input-group input-group-sm">
+                    <input type="number" class="form-control" id="fp-dedup-every" value="1" min="0">
+                    <select class="form-select" id="fp-dedup-unit"></select>
+                  </div>
+                </div>
                 <div class="col-12">
                   <div class="small text-muted">
-                    Mantiene il record più vecchio di una sequenza identica e, se il valore continua per più giorni, al massimo uno al giorno.
+                    Mantiene il record più vecchio di ogni sequenza identica e almeno
+                    un record per ogni intervallo indicato (0 = deduplica pura, senza
+                    preservazione periodica).
                   </div>
                 </div>
               </div>
@@ -227,6 +231,15 @@
                    title="Ora giornaliera di esecuzione automatica (vuoto = solo manuale)">
             <div class="form-text">Lascia vuoto per solo manuale</div>
           </div>
+        </div>
+
+        <div class="form-check mt-3">
+          <input type="checkbox" class="form-check-input" id="f-cleanup-attrs" checked>
+          <label class="form-check-label small" for="f-cleanup-attrs">
+            Elimina anche le righe <code>state_attributes</code> rimaste orfane
+            <i class="bi bi-info-circle text-muted ms-1"
+               title="Pulizia mirata alle righe attributi non più referenziate da nessun record, eseguita al termine della strategia. Non tocca gli attributi condivisi con altri sensori."></i>
+          </label>
         </div>
 
         <div class="d-flex gap-2 mt-3">
@@ -436,10 +449,24 @@ document.addEventListener('DOMContentLoaded', () => {
       deleteSaved(deleteBtn.dataset.strategyId);
     }
   });
+  initStrategyParamUI();
   updateFormParams();
   setupEntitySearch();
   void _pollExecutionStatus();
 });
+
+// Popola i select dinamici e collega i controlli condivisi (una sola volta).
+function initStrategyParamUI() {
+  const peakUnit = document.getElementById('fp-peak-unit');
+  if (peakUnit && !peakUnit.options.length) peakUnit.innerHTML = hlUnitOptionsHtml('hour');
+  const dedupUnit = document.getElementById('fp-dedup-unit');
+  if (dedupUnit && !dedupUnit.options.length) dedupUnit.innerHTML = hlUnitOptionsHtml('day');
+  const peakAgg = document.getElementById('fp-peak-agg');
+  if (peakAgg && !peakAgg.options.length) peakAgg.innerHTML = hlAggOptionsHtml('max');
+  const tiers = document.getElementById('fp-adp-tiers');
+  if (tiers && !tiers.children.length) hlSetTiers(tiers, null);
+  hlInitStrategyParamControls('fp');
+}
 
 function updateFormParams() {
   const val = document.getElementById('f-type').value;
@@ -537,23 +564,9 @@ function renderEntityTags() {
 
 function getFormParams() {
   const strategy = document.getElementById('f-type').value;
-  const params = {};
+  const params = hlBuildStrategyParams('fp', strategy) || {};
   if (strategy === 'simple_purge') {
     params.older_than_days = parseInt(document.getElementById('fp-simple-days').value, 10);
-  } else if (strategy === 'adaptive_purge') {
-    params.threshold_1_days = parseInt(document.getElementById('fp-adp-t1').value, 10);
-    params.threshold_2_days = parseInt(document.getElementById('fp-adp-t2').value, 10);
-    params.threshold_3_days = parseInt(document.getElementById('fp-adp-t3').value, 10);
-    params.threshold_4_days = 36500;
-  } else if (strategy === 'peak_decimation') {
-    params.older_than_days = parseInt(document.getElementById('fp-peak-days').value, 10);
-    params.granularity = document.getElementById('fp-peak-gran').value;
-    params.keep_resets = document.getElementById('fp-peak-resets').checked;
-    if (params.keep_resets) {
-      params.reset_threshold_pct = parseFloat(document.getElementById('fp-peak-threshold').value) || 50;
-    }
-  } else if (strategy === 'deduplicate_values') {
-    params.older_than_days = parseInt(document.getElementById('fp-dedup-days').value, 10);
   } else if (strategy === 'outlier_purge') {
     params.remove_negative = document.getElementById('fp-outlier-neg').checked;
     const minVal = document.getElementById('fp-outlier-min').value;
@@ -561,6 +574,7 @@ function getFormParams() {
     if (minVal !== '') params.min_value = parseFloat(minVal);
     if (maxVal !== '') params.max_value = parseFloat(maxVal);
   }
+  params.cleanup_attributes = document.getElementById('f-cleanup-attrs').checked;
   return params;
 }
 
@@ -600,6 +614,8 @@ function resetForm() {
   document.getElementById('f-schedule-time').value = '';
   selectedEntities = [];
   renderEntityTags();
+  hlSetTiers(document.getElementById('fp-adp-tiers'), null);
+  document.getElementById('f-cleanup-attrs').checked = true;
   document.getElementById('form-title').textContent = 'Nuova strategia';
 }
 
@@ -617,24 +633,16 @@ function editSaved(s) {
   selectedEntities = s.entity_ids || [];
   renderEntityTags();
   const p = s.params || {};
-  if (s.strategy_type === 'simple_purge') {
+  if (hlHydrateStrategyForm('fp', s.strategy_type, p)) {
+    // gestito dagli helper condivisi (adaptive / peak / dedup)
+  } else if (s.strategy_type === 'simple_purge') {
     document.getElementById('fp-simple-days').value = p.older_than_days || 30;
-  } else if (s.strategy_type === 'adaptive_purge') {
-    document.getElementById('fp-adp-t1').value = p.threshold_1_days || 7;
-    document.getElementById('fp-adp-t2').value = p.threshold_2_days || 30;
-    document.getElementById('fp-adp-t3').value = p.threshold_3_days || 365;
-  } else if (s.strategy_type === 'peak_decimation') {
-    document.getElementById('fp-peak-days').value = p.older_than_days || 7;
-    document.getElementById('fp-peak-gran').value = p.granularity || 'hour';
-    document.getElementById('fp-peak-resets').checked = p.keep_resets !== false;
-    document.getElementById('fp-peak-threshold').value = p.reset_threshold_pct || 50;
-  } else if (s.strategy_type === 'deduplicate_values') {
-    document.getElementById('fp-dedup-days').value = p.older_than_days || 7;
   } else if (s.strategy_type === 'outlier_purge') {
     document.getElementById('fp-outlier-neg').checked = p.remove_negative !== false;
     document.getElementById('fp-outlier-min').value = p.min_value ?? '';
     document.getElementById('fp-outlier-max').value = p.max_value ?? '';
   }
+  document.getElementById('f-cleanup-attrs').checked = p.cleanup_attributes !== false;
   document.getElementById('f-schedule-time').value = s.schedule_time || '';
   document.getElementById('form-title').textContent = 'Modifica strategia';
   document.getElementById('strategy-form-card').scrollIntoView({ behavior: 'smooth' });
@@ -771,7 +779,7 @@ document.getElementById('entity-tags')?.addEventListener('click', e => {
         BASE.filter(p => p.t >= 0.75).forEach(p => out.push({ ...p, cls: 'keep' }));
         return out;
       })(),
-      caption: 'Quattro fasce dal più vecchio: elimina → 1 al giorno → 1 all’ora → tutto invariato.',
+      caption: 'Fasce configurabili dal più vecchio: elimina → bucket più larghi → bucket più stretti → tutto invariato. Bucket e aggregazione si scelgono per fascia.',
     },
     outlier_purge: {
       thresholds: [],

@@ -64,6 +64,12 @@ def analyze_sensor(db: HaDatabase, entity_id: str) -> dict:
         recent_values = db.get_recent_values(entity_id, limit=10)
         schema = db.get_schema_info()
 
+        try:
+            exclusive_attributes = db.get_exclusive_attributes_count(entity_id)
+        except Exception as e:
+            logger.warning(f"exclusive attributes {entity_id}: {e}")
+            exclusive_attributes = 0
+
         # Calcola la frequenza media
         if daily_counts:
             total = sum(d["count"] for d in daily_counts)
@@ -83,6 +89,7 @@ def analyze_sensor(db: HaDatabase, entity_id: str) -> dict:
             "avg_per_day": round(avg_per_day, 1),
             "is_numeric": stats.get("is_numeric", False),
             "savings_estimate": savings,
+            "exclusive_attributes": exclusive_attributes,
         }
     except Exception as e:
         logger.error(f"Errore analisi sensore {entity_id}: {e}")

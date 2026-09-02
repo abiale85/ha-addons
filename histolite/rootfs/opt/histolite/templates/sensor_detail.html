@@ -121,44 +121,43 @@
         </div>
         <!-- Params adaptive -->
         <div id="dp-adaptive" class="detail-params d-none">
-          <div class="row g-2">
-            <div class="col-4">
-              <label class="form-label small">Orario dopo</label>
-              <div class="input-group input-group-sm">
-                <input type="number" class="form-control" id="dp-adp-t1" value="7" min="1">
-                <span class="input-group-text">gg</span>
-              </div>
-            </div>
-            <div class="col-4">
-              <label class="form-label small">Giorn. dopo</label>
-              <div class="input-group input-group-sm">
-                <input type="number" class="form-control" id="dp-adp-t2" value="30" min="1">
-                <span class="input-group-text">gg</span>
-              </div>
-            </div>
-            <div class="col-4">
-              <label class="form-label small">Elimina dopo</label>
-              <div class="input-group input-group-sm">
-                <input type="number" class="form-control" id="dp-adp-t3" value="365" min="1">
-                <span class="input-group-text">gg</span>
-              </div>
-            </div>
+          <label class="form-label small">Fasce (dalla più recente alla più vecchia)</label>
+          <div id="dp-adp-tiers"></div>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="dp-adp-add-tier">
+            <i class="bi bi-plus me-1"></i>Aggiungi fascia
+          </button>
+          <div class="form-text">
+            Dopo N giorni: <em>appiattisci</em> (1 record per bucket col valore
+            aggregato scelto) oppure <em>elimina</em>. Il più recente resta intatto.
           </div>
         </div>
         <!-- Params peak decimation -->
         <div id="dp-peak" class="detail-params d-none">
           <div class="alert alert-info py-2 mb-3">
-            <small><i class="bi bi-info-circle me-1"></i>Ideale per contatori energia, gas, acqua che crescono nel tempo. Mantiene il valore più alto del periodo e preserva i reset.</small>
+            <small><i class="bi bi-info-circle me-1"></i>Ideale per contatori energia, gas, acqua che crescono nel tempo. Di default mantiene il valore più alto del periodo e preserva i reset.</small>
           </div>
           <label class="form-label">Applica a dati più vecchi di</label>
           <div class="input-group input-group-sm mb-2">
             <input type="number" class="form-control" id="dp-peak-days" value="7" min="1">
             <span class="input-group-text">giorni</span>
           </div>
-          <select class="form-select form-select-sm mb-3" id="dp-peak-gran">
-            <option value="hour">Granularità oraria</option>
-            <option value="day">Granularità giornaliera</option>
-          </select>
+          <div class="row g-2 mb-3">
+            <div class="col-7">
+              <label class="form-label small">Bucket ogni</label>
+              <div class="input-group input-group-sm">
+                <input type="number" class="form-control" id="dp-peak-every" value="1" min="1">
+                <select class="form-select" id="dp-peak-unit"></select>
+              </div>
+            </div>
+            <div class="col-3">
+              <label class="form-label small">Aggregazione</label>
+              <select class="form-select form-select-sm" id="dp-peak-agg"></select>
+            </div>
+            <div class="col-2 d-none" id="dp-peak-pct-wrap">
+              <label class="form-label small">%ile</label>
+              <input type="number" class="form-control form-control-sm" id="dp-peak-pct" value="95" min="0" max="100">
+            </div>
+          </div>
           <div class="form-check form-check mb-2">
             <input type="checkbox" class="form-check-input" id="dp-peak-resets" checked>
             <label class="form-check-label" for="dp-peak-resets">
@@ -218,6 +217,12 @@
         </div>
 
         <hr class="my-3">
+        <div class="form-check mb-2">
+          <input type="checkbox" class="form-check-input" id="dp-cleanup-attrs" checked>
+          <label class="form-check-label small" for="dp-cleanup-attrs">
+            Elimina anche le righe <code>state_attributes</code> rimaste orfane
+          </label>
+        </div>
         <div id="dp-preview-result" class="small text-muted mb-3">
           Usa "Anteprima" per stimare l'impatto prima di applicare.
         </div>
@@ -296,7 +301,7 @@ async function loadDetail() {
     renderRecentValues(data.recent_values || []);
 
     // Savings
-    renderSavings(data.savings_estimate || {});
+    renderSavings(data.savings_estimate || {}, data.exclusive_attributes || 0);
 
     // Chart
     renderDensityChart(data.daily_counts || []);
@@ -323,10 +328,17 @@ function renderRecentValues(values) {
   `).join('');
 }
 
-function renderSavings(savings) {
+function renderSavings(savings, exclusiveAttributes = 0) {
   const el = document.getElementById('savings-body');
+  const attrNote = exclusiveAttributes
+    ? `<div class="small text-muted mt-2 pt-2 border-top border-secondary">
+         <i class="bi bi-tags me-1"></i>Fino a <strong>${fmt(exclusiveAttributes)}</strong> righe
+         <code>state_attributes</code> usate solo da questo sensore verrebbero
+         liberate da un purge totale (pulizia orfani inclusa nelle strategie).
+       </div>`
+    : '';
   if (!Object.keys(savings).length) {
-    el.innerHTML = '<p class="text-muted small">Dati insufficienti</p>';
+    el.innerHTML = '<p class="text-muted small">Dati insufficienti</p>' + attrNote;
     return;
   }
   const labels = {
@@ -344,7 +356,7 @@ function renderSavings(savings) {
         <div class="progress-bar bg-warning" style="width:${Math.min(v.pct, 100)}%"></div>
       </div>
     </div>
-  `).join('');
+  `).join('') + attrNote;
 }
 
 function renderDensityChart(dailyCounts) {
@@ -380,6 +392,16 @@ async function reloadChart() {
   renderDensityChart(data);
 }
 
+function initDetailParamUI() {
+  const peakUnit = document.getElementById('dp-peak-unit');
+  if (peakUnit && !peakUnit.options.length) peakUnit.innerHTML = hlUnitOptionsHtml('hour');
+  const peakAgg = document.getElementById('dp-peak-agg');
+  if (peakAgg && !peakAgg.options.length) peakAgg.innerHTML = hlAggOptionsHtml('max');
+  const tiers = document.getElementById('dp-adp-tiers');
+  if (tiers && !tiers.children.length) hlSetTiers(tiers, null);
+  hlInitStrategyParamControls('dp');
+}
+
 function updateDetailParams() {
   const val = document.getElementById('detail-strategy').value;
   document.querySelectorAll('.detail-params').forEach(el => el.classList.add('d-none'));
@@ -391,25 +413,14 @@ function updateDetailParams() {
   };
   document.getElementById(map[val])?.classList.remove('d-none');
   document.getElementById('strategy-desc').textContent = STRATEGY_DESCS[val] || '';
+  initDetailParamUI();
 }
 
 function getDetailParams() {
   const strategy = document.getElementById('detail-strategy').value;
-  const params = {};
+  const params = hlBuildStrategyParams('dp', strategy) || {};
   if (strategy === 'simple_purge') {
     params.older_than_days = parseInt(document.getElementById('dp-simple-days').value, 10);
-  } else if (strategy === 'adaptive_purge') {
-    params.threshold_1_days = parseInt(document.getElementById('dp-adp-t1').value, 10);
-    params.threshold_2_days = parseInt(document.getElementById('dp-adp-t2').value, 10);
-    params.threshold_3_days = parseInt(document.getElementById('dp-adp-t3').value, 10);
-    params.threshold_4_days = 36500;
-  } else if (strategy === 'peak_decimation') {
-    params.older_than_days = parseInt(document.getElementById('dp-peak-days').value, 10);
-    params.granularity = document.getElementById('dp-peak-gran').value;
-    params.keep_resets = document.getElementById('dp-peak-resets').checked;
-    if (params.keep_resets) {
-      params.reset_threshold_pct = parseFloat(document.getElementById('dp-peak-threshold').value) || 50;
-    }
   } else if (strategy === 'outlier_purge') {
     params.remove_negative = document.getElementById('dp-outlier-neg').checked;
     const minVal = document.getElementById('dp-outlier-min').value;
@@ -423,6 +434,7 @@ function getDetailParams() {
       params.state_blacklist = statesText.split('\n').map(s => s.trim()).filter(s => s);
     }
   }
+  params.cleanup_attributes = document.getElementById('dp-cleanup-attrs').checked;
   return { strategy, params };
 }
 
@@ -433,8 +445,11 @@ async function detailPreview() {
       strategy_type: strategy, entity_ids: [ENTITY_ID], params
     });
     const del = result.total_deleted ?? result.estimated_deleted ?? '?';
-    document.getElementById('dp-preview-result').innerHTML =
-      `<span class="text-info"><i class="bi bi-info-circle me-1"></i>Stima: <strong>~${fmt(del)}</strong> record eliminati/modificati</span>`;
+    const attr = result.total_attr_removed ?? 0;
+    let msg = `<span class="text-info"><i class="bi bi-info-circle me-1"></i>Stima: <strong>~${fmt(del)}</strong> record eliminati/modificati`;
+    if (attr) msg += ` · <strong>~${fmt(attr)}</strong> righe <code>state_attributes</code> orfane`;
+    msg += '</span>';
+    document.getElementById('dp-preview-result').innerHTML = msg;
   } catch(e) {
     document.getElementById('dp-preview-result').innerHTML = `<span class="text-danger">${e.message}</span>`;
   }
