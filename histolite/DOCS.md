@@ -202,7 +202,7 @@ Qualsiasi strategia può essere eseguita in **modalità anteprima** prima dell'a
 HistoLite è progettato per funzionare con database di grandi dimensioni (>10M record, >5GB):
 
 - **Server HTTP**: Gunicorn con 1 worker + 4 thread (`gthread`) — bassa RAM, concorrenza sufficiente
-- **Riavvio automatico worker** ogni 200 richieste per liberare memoria frammentata di Python
+- **Nessun riciclo periodico del worker**: `--max-requests 0`, così una strategia lunga o schedulata non viene mai troncata da un riavvio. La memoria viene liberata con `gc.collect()` dopo le scritture di cache e al termine di ogni strategia
 - **SQLite ottimizzato**: cache limitata a 2MB per connessione, nessun memory-mapping, temp store su file
 - **Cache overview** con TTL 5 minuti — evita query GROUP BY ripetute su milioni di righe
 - **Indici automatici** su `entity_id` e `last_updated_ts` creati al primo avvio (può richiedere qualche secondo)
@@ -222,6 +222,22 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 ---
 
 ## Changelog
+
+### 2.9.2
+- **Strategie – esecuzione affidabile**: Gunicorn riciclava l'unico worker ogni
+  ~200 richieste (`--max-requests`). Con il polling di stato a 2 req/s il limite
+  si raggiungeva in ~1 minuto e il worker veniva riavviato **mentre una strategia
+  (anche schedulata) era in corso**, uccidendone il thread: l'overlay spariva
+  senza errori e non restava traccia in Cronologia. Il riciclo periodico del
+  worker è stato **disattivato** (`--max-requests 0`); la RAM viene liberata con
+  `gc.collect()` dopo le scritture di cache e al termine di ogni strategia.
+- **Esito sempre registrato**: ogni esecuzione crea subito una voce di Cronologia
+  con stato `in corso`, aggiornata a `eseguita` / `errore` a fine run. Se il
+  processo termina prima del completamento la voce resta e viene mostrata come
+  `interrotta`. `/api/strategy-status` ricostruisce l'esito dalla Cronologia se il
+  processo è stato riavviato, così la pagina Strategie non "sparisce" più in
+  silenzio: mostra completata / fallita / interrotta.
+- Polling di stato nella pagina Strategie portato da 0,5 s a 2 s.
 
 ### 2.9.1
 - **Fix Dashboard – pulsante Aggiorna**: il ricalcolo dell'overview lanciava un

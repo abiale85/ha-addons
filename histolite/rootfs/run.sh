@@ -86,7 +86,9 @@ export PORT=8099
 
 # Avvia l'applicazione con Gunicorn
 # - 1 worker gthread + 4 thread: ottimale per add-on locale (bassa RAM, concorrenza sufficiente)
-# - max_requests: riavvia il worker ogni 200 richieste per liberare memoria frammentata
+# - NIENTE --max-requests: il riciclo periodico del worker ucciderebbe il thread
+#   di una strategia (manuale o schedulata) a metà esecuzione. La RAM viene
+#   liberata con gc.collect() dopo le scritture di cache e dopo ogni strategia.
 # - timeout 120s: sufficiente per query SQLite pesanti
 cd /opt/histolite
 exec gunicorn \
@@ -94,8 +96,7 @@ exec gunicorn \
   --workers 1 \
   --threads 4 \
   --worker-class gthread \
-  --max-requests 200 \
-  --max-requests-jitter 30 \
+  --max-requests 0 \
   --timeout 120 \
   --keep-alive 2 \
   --log-level "${LOG_LEVEL:-info}" \

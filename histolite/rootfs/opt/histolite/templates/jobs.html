@@ -23,15 +23,21 @@
 {% else %}
 <div id="jobs-list">
   {% for job in jobs %}
-  <div class="card mb-2 job-card {% if job.result.error %}border-danger{% elif job.dry_run %}border-secondary{% else %}border-success{% endif %}">
+  {% set st = job.status or ('error' if job.result.error else 'done') %}
+  {% set border = 'border-secondary' if job.dry_run else {'running':'border-info','interrupted':'border-warning','error':'border-danger'}.get(st, 'border-success') %}
+  <div class="card mb-2 job-card {{ border }}">
     <div class="card-body py-2 px-3">
       <div class="row align-items-center">
         <div class="col-md-4">
           <div class="d-flex align-items-center gap-2">
-            {% if job.result.error %}
-              <i class="bi bi-x-circle-fill text-danger fs-5"></i>
-            {% elif job.dry_run %}
+            {% if job.dry_run %}
               <i class="bi bi-eye-fill text-secondary fs-5"></i>
+            {% elif st == 'running' %}
+              <i class="bi bi-arrow-repeat text-info fs-5"></i>
+            {% elif st == 'interrupted' %}
+              <i class="bi bi-exclamation-triangle-fill text-warning fs-5"></i>
+            {% elif st == 'error' %}
+              <i class="bi bi-x-circle-fill text-danger fs-5"></i>
             {% else %}
               <i class="bi bi-check-circle-fill text-success fs-5"></i>
             {% endif %}
@@ -42,8 +48,10 @@
           </div>
         </div>
         <div class="col-md-3">
-          <span class="badge {% if job.dry_run %}bg-secondary{% else %}bg-primary{% endif %} me-1">
-            {{ 'Anteprima' if job.dry_run else 'Eseguita' }}
+          {% set badge = {'running':'bg-info text-dark','interrupted':'bg-warning text-dark','error':'bg-danger'}.get(st, 'bg-primary') %}
+          {% set badge_txt = {'running':'In corso','interrupted':'Interrotta','error':'Errore'}.get(st, 'Eseguita') %}
+          <span class="badge {{ 'bg-secondary' if job.dry_run else badge }} me-1">
+            {{ 'Anteprima' if job.dry_run else badge_txt }}
           </span>
           <span class="badge bg-dark border border-secondary">
             {{ job.result.entity_count }} entità
@@ -51,7 +59,9 @@
         </div>
         <div class="col-md-3 text-center">
           {% if job.result.error %}
-            <span class="text-danger small">{{ job.result.error|truncate(40) }}</span>
+            <span class="{{ 'text-warning' if st == 'interrupted' else 'text-danger' }} small">{{ job.result.error|truncate(48) }}</span>
+          {% elif st == 'running' %}
+            <span class="text-info small"><i class="bi bi-hourglass-split me-1"></i>in esecuzione…</span>
           {% else %}
             <span class="text-warning fw-bold">
               <i class="bi bi-trash me-1"></i>{{ '{:,}'.format(job.result.total_deleted or 0) }} record

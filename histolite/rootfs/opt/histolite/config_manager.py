@@ -124,9 +124,32 @@ class ConfigManager:
         jobs = self._load(self.jobs_file)
         return sorted(jobs, key=lambda j: j.get("executed_at", ""), reverse=True)[:limit]
 
+    def latest_job(self) -> Optional[dict]:
+        """Il job più recente per ``executed_at`` (o None)."""
+        jobs = self._load(self.jobs_file)
+        if not jobs:
+            return None
+        return max(jobs, key=lambda j: j.get("executed_at", ""))
+
+    def _trim_and_save_jobs(self, jobs: list) -> None:
+        if len(jobs) > 200:
+            jobs = sorted(jobs, key=lambda j: j.get("executed_at", ""), reverse=True)[:200]
+        self._save(self.jobs_file, jobs)
+
+    @staticmethod
+    def _result_summary(result: dict) -> dict:
+        return {
+            "total_deleted": result.get("total_deleted", 0),
+            "total_attr_removed": result.get("total_attr_removed", 0),
+            "entity_count": result.get("entity_count", 0),
+            "backup": result.get("backup"),
+            "error": result.get("error"),
+        }
+
     def save_job(self, result: dict, strategy_name: str, entity_ids: list,
                  params: dict, dry_run: bool) -> dict:
-        """Salva il risultato di un'operazione eseguita."""
+        """Salva il risultato di un'operazione sincrona già conclusa
+        (manutenzione: vacuum, cleanup, statistics_repair, entity_merge…)."""
         jobs = self._load(self.jobs_file)
         entry = {
             "id": str(uuid.uuid4()),
@@ -135,20 +158,66 @@ class ConfigManager:
             "entity_ids": entity_ids,
             "params": params,
             "dry_run": dry_run,
-            "result": {
-                "total_deleted": result.get("total_deleted", 0),
-                "total_attr_removed": result.get("total_attr_removed", 0),
-                "entity_count": result.get("entity_count", 0),
-                "backup": result.get("backup"),
-                "error": result.get("error"),
-            },
+            "status": "error" if result.get("error") else "done",
+            "result": self._result_summary(result),
         }
         jobs.append(entry)
-        # Mantieni solo gli ultimi 200 job
-        if len(jobs) > 200:
-            jobs = sorted(jobs, key=lambda j: j.get("executed_at", ""), reverse=True)[:200]
-        self._save(self.jobs_file, jobs)
+        self._trim_and_save_jobs(jobs)
         return entry
+
+    def create_running_job(self, strategy_name: str, entity_ids: list,
+                           params: dict) -> str:
+        """Registra un job 'in corso' e ne restituisce l'id.
+
+        Prima marca come 'interrupted' ogni job ancora 'running' (residuo di un
+        processo terminato senza aggiornare l'esito).
+        """
+        jobs = self._load(self.jobs_file)
+        for j in jobs:
+            if j.get("status") == "running":
+                j["status"] = "interrupted"
+                j.setdefault("result", {}).setdefault(
+                    "error", "Interrotta: processo terminato prima del completamento")
+                j["finished_at"] = _now()
+        job_id = str(uuid.uuid4())
+        now_ts = datetime.now().timestamp()
+        jobs.append({
+            "id": job_id,
+            "executed_at": _now(),
+            "strategy": strategy_name,
+            "entity_ids": entity_ids,
+            "params": params,
+            "dry_run": False,
+            "status": "running",
+            "started_ts": now_ts,
+            "updated_ts": now_ts,
+            "result": {},
+        })
+        self._trim_and_save_jobs(jobs)
+        return job_id
+
+    def finish_job(self, job_id: str, result: dict, status: str = "done") -> None:
+        """Aggiorna il job 'running' con l'esito finale."""
+        jobs = self._load(self.jobs_file)
+        for j in jobs:
+            if j.get("id") != job_id:
+                continue
+            j["status"] = "error" if (status == "error" or result.get("error")) else status
+            j["finished_at"] = _now()
+            if result.get("duration_sec") is not None:
+                j["duration_sec"] = result["duration_sec"]
+            j["result"] = self._result_summary(result)
+            break
+        self._trim_and_save_jobs(jobs)
+
+    def heartbeat_job(self, job_id: str) -> None:
+        """Aggiorna updated_ts di un job 'running' (segno di vita)."""
+        jobs = self._load(self.jobs_file)
+        for j in jobs:
+            if j.get("id") == job_id and j.get("status") == "running":
+                j["updated_ts"] = datetime.now().timestamp()
+                self._save(self.jobs_file, jobs)
+                return
 
     def clear_jobs(self):
         self._save(self.jobs_file, [])

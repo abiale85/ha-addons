@@ -133,26 +133,34 @@ _cancel_strategy_event = threading.Event()
 # l'esecuzione avviene fuori dal ciclo richiesta/risposta.
 _last_strategy_result = None  # {'id': str, 'ok': bool, 'summary': str, 'finished_ts': float}
 
+# Timestamp di avvio del processo: un job 'running' con started_ts precedente
+# appartiene a un worker morto → esecuzione interrotta.
+PROCESS_START_TS = time.time()
+
+
+def _summarize_result(result: dict | None, error: str | None = None) -> tuple[bool, str]:
+    """(ok, testo) da un dict risultato di strategia."""
+    if error is not None:
+        return False, str(error)
+    if result is None:
+        return False, "Esito sconosciuto"
+    if result.get("error"):
+        return False, str(result["error"])
+    deleted = result.get("total_deleted", 0)
+    attr = result.get("total_attr_removed", 0)
+    dur = result.get("duration_sec")
+    summary = f"{deleted} record eliminati"
+    if attr:
+        summary += f" + {attr} attributi orfani"
+    if dur is not None:
+        summary += f" in {dur}s"
+    return True, summary
+
 
 def _record_strategy_result(strategy_id: str, result: dict | None, error: str | None = None) -> None:
     """Memorizza l'esito dell'ultima strategia in background per l'endpoint di stato."""
     global _last_strategy_result
-    if error is not None:
-        ok, summary = False, error
-    elif result is None:
-        ok, summary = False, "Esito sconosciuto"
-    elif result.get("error"):
-        ok, summary = False, str(result["error"])
-    else:
-        deleted = result.get("total_deleted", 0)
-        attr = result.get("total_attr_removed", 0)
-        dur = result.get("duration_sec")
-        summary = f"{deleted} record eliminati"
-        if attr:
-            summary += f" + {attr} attributi orfani"
-        if dur is not None:
-            summary += f" in {dur}s"
-        ok = True
+    ok, summary = _summarize_result(result, error)
     with _running_strategy_lock:
         _last_strategy_result = {
             "id": strategy_id,
@@ -169,7 +177,16 @@ def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
 
     name = saved.get("name", saved["id"])
     strategy_id = saved["id"]
+    strategy_type = saved["strategy_type"]
+    entity_ids = saved.get("entity_ids", [])
+    params = saved.get("params", {})
     logger.info(f"[Scheduler] Avvio strategia '{name}'")
+
+    job_id = None
+    try:
+        job_id = config_manager.create_running_job(strategy_type, entity_ids, params)
+    except Exception as je:
+        logger.error(f"[Scheduler] Errore create_running_job per '{name}': {je}", exc_info=True)
 
     # Traccia inizio esecuzione
     with _running_strategy_lock:
@@ -179,69 +196,7 @@ def _run_strategy_safe(saved: dict, is_manual: bool = False) -> dict:
             'id': strategy_id,
             'start_time': time.time(),
             'manual': is_manual,
-        }
-    
-    try:
-        start = time.time()
-        result = execute_strategy(
-            db=db,
-            strategy_name=saved["strategy_type"],
-            entity_ids=saved.get("entity_ids", []),
-            params=saved.get("params", {}),
-            dry_run=False,
-            batch_size=MAX_ROWS_PER_BATCH,
-            cancel_event=_cancel_strategy_event,
-        )
-        result["duration_sec"] = round(time.time() - start, 2)
-        now_iso = datetime.now().isoformat(timespec="seconds")
-        try:
-            config_manager.save_job(
-                result, saved["strategy_type"],
-                saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
-            )
-        except Exception as save_err:
-            logger.error(f"[Scheduler] Errore salvataggio job per '{name}': {save_err}", exc_info=True)
-            raise
-        try:
-            config_manager.update_strategy_last_run(saved["id"], now_iso)
-        except Exception as upd_err:
-            logger.error(f"[Scheduler] Errore aggiornamento last_run per '{name}': {upd_err}", exc_info=True)
-            raise
-        logger.info(f"[Scheduler] Completata '{name}' in {result['duration_sec']}s")
-        _record_strategy_result(strategy_id, result)
-        return result
-    except Exception as e:
-        logger.error(f"[Scheduler] Errore esecuzione '{name}': {e}", exc_info=True)
-        _record_strategy_result(strategy_id, None, error=str(e))
-        now_iso = datetime.now().isoformat(timespec="seconds")
-        try:
-            config_manager.update_strategy_last_run(saved["id"], now_iso)
-        except Exception as upd_err:
-            logger.error(f"[Scheduler] Errore aggiornamento last_run nell'exception handler per '{name}': {upd_err}", exc_info=True)
-        try:
-            config_manager.save_job(
-                {"error": str(e)}, saved["strategy_type"],
-                saved.get("entity_ids", []), saved.get("params", {}), dry_run=False
-            )
-        except Exception as save_err:
-            logger.error(f"[Scheduler] Errore salvataggio error job per '{name}': {save_err}", exc_info=True)
-    finally:
-        # Pulisci stato di esecuzione
-        with _running_strategy_lock:
-            _running_strategy = None
-
-
-def _run_ad_hoc_strategy_safe(strategy_type: str, entity_ids: list[str], params: dict) -> dict:
-    """Esegue una strategia non salvata in un worker dedicato."""
-    global _running_strategy, _cancel_strategy_event, _last_strategy_result
-
-    with _running_strategy_lock:
-        _cancel_strategy_event.clear()
-        _last_strategy_result = None
-        _running_strategy = {
-            'id': strategy_type,
-            'start_time': time.time(),
-            'manual': True,
+            'job_id': job_id,
         }
 
     try:
@@ -256,24 +211,86 @@ def _run_ad_hoc_strategy_safe(strategy_type: str, entity_ids: list[str], params:
             cancel_event=_cancel_strategy_event,
         )
         result["duration_sec"] = round(time.time() - start, 2)
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        if job_id:
+            config_manager.finish_job(job_id, result, "done")
         try:
-            config_manager.save_job(result, strategy_type, entity_ids, params, dry_run=False)
-        except Exception as save_err:
-            logger.error(f"[Scheduler] Errore salvataggio job ad hoc '{strategy_type}': {save_err}", exc_info=True)
-            raise
+            config_manager.update_strategy_last_run(saved["id"], now_iso)
+        except Exception as upd_err:
+            logger.error(f"[Scheduler] Errore aggiornamento last_run per '{name}': {upd_err}", exc_info=True)
+        logger.info(f"[Scheduler] Completata '{name}' in {result['duration_sec']}s")
+        _record_strategy_result(strategy_id, result)
+        return result
+    except Exception as e:
+        logger.error(f"[Scheduler] Errore esecuzione '{name}': {e}", exc_info=True)
+        _record_strategy_result(strategy_id, None, error=str(e))
+        try:
+            config_manager.update_strategy_last_run(
+                saved["id"], datetime.now().isoformat(timespec="seconds"))
+        except Exception as upd_err:
+            logger.error(f"[Scheduler] Errore aggiornamento last_run nell'exception handler per '{name}': {upd_err}", exc_info=True)
+        if job_id:
+            try:
+                config_manager.finish_job(
+                    job_id, {"error": str(e), "entity_count": len(entity_ids)}, "error")
+            except Exception as save_err:
+                logger.error(f"[Scheduler] Errore finish_job (error) per '{name}': {save_err}", exc_info=True)
+    finally:
+        with _running_strategy_lock:
+            _running_strategy = None
+        gc.collect()
+
+
+def _run_ad_hoc_strategy_safe(strategy_type: str, entity_ids: list[str], params: dict) -> dict:
+    """Esegue una strategia non salvata in un worker dedicato."""
+    global _running_strategy, _cancel_strategy_event, _last_strategy_result
+
+    job_id = None
+    try:
+        job_id = config_manager.create_running_job(strategy_type, entity_ids, params)
+    except Exception as je:
+        logger.error(f"[Scheduler] Errore create_running_job ad hoc '{strategy_type}': {je}", exc_info=True)
+
+    with _running_strategy_lock:
+        _cancel_strategy_event.clear()
+        _last_strategy_result = None
+        _running_strategy = {
+            'id': strategy_type,
+            'start_time': time.time(),
+            'manual': True,
+            'job_id': job_id,
+        }
+
+    try:
+        start = time.time()
+        result = execute_strategy(
+            db=db,
+            strategy_name=strategy_type,
+            entity_ids=entity_ids,
+            params=params,
+            dry_run=False,
+            batch_size=MAX_ROWS_PER_BATCH,
+            cancel_event=_cancel_strategy_event,
+        )
+        result["duration_sec"] = round(time.time() - start, 2)
+        if job_id:
+            config_manager.finish_job(job_id, result, "done")
         logger.info(f"[Scheduler] Completata esecuzione ad hoc '{strategy_type}' in {result['duration_sec']}s")
         _record_strategy_result(strategy_type, result)
         return result
     except Exception as e:
         logger.error(f"[Scheduler] Errore esecuzione ad hoc '{strategy_type}': {e}", exc_info=True)
         _record_strategy_result(strategy_type, None, error=str(e))
-        try:
-            config_manager.save_job({"error": str(e)}, strategy_type, entity_ids, params, dry_run=False)
-        except Exception as save_err:
-            logger.error(f"[Scheduler] Errore salvataggio error job ad hoc '{strategy_type}': {save_err}", exc_info=True)
+        if job_id:
+            try:
+                config_manager.finish_job(
+                    job_id, {"error": str(e), "entity_count": len(entity_ids)}, "error")
+            except Exception as save_err:
+                logger.error(f"[Scheduler] Errore finish_job ad hoc (error) '{strategy_type}': {save_err}", exc_info=True)
     finally:
         with _running_strategy_lock:
             _running_strategy = None
+        gc.collect()
 
 
 def _start_strategy_worker(target, lock_label: str) -> None:
@@ -775,24 +792,72 @@ def api_execute_saved(strategy_id):
         return jsonify({"error": str(e)}), 500
 
 
+_STALE_RUNNING_SECONDS = 900  # oltre questo, un job 'running' senza heartbeat è considerato morto
+
+
 @app.route("/api/strategy-status", methods=["GET"])
 def api_strategy_status():
-    """Ritorna lo stato di esecuzione della strategia in corso (se presente)."""
+    """Stato dell'esecuzione strategia. In memoria se questo processo la sta
+    seguendo, altrimenti ricostruito dalla Cronologia su disco (così l'esito
+    resta visibile anche dopo un riavvio del processo)."""
     global _running_strategy
     with _running_strategy_lock:
-        if _running_strategy is None:
-            resp = {"running": False}
-            if _last_strategy_result is not None:
-                resp["last_result"] = _last_strategy_result
-            return jsonify(resp)
+        if _running_strategy is not None:
+            elapsed = time.time() - _running_strategy['start_time']
+            return jsonify({
+                "running": True,
+                "strategy_id": _running_strategy['id'],
+                "elapsed_sec": round(elapsed, 1),
+                "manual": _running_strategy['manual'],
+                "job_id": _running_strategy.get('job_id'),
+            })
+        last_mem = _last_strategy_result
 
-        elapsed = time.time() - _running_strategy['start_time']
+    # Nessuna esecuzione tracciata in memoria: guarda l'ultimo job su disco.
+    try:
+        job = config_manager.latest_job()
+    except Exception as e:
+        logger.warning(f"strategy-status latest_job: {e}")
+        job = None
+
+    if job and job.get("status") == "running":
+        started = job.get("started_ts") or 0
+        age = time.time() - started
+        if started < PROCESS_START_TS or age > _STALE_RUNNING_SECONDS:
+            return jsonify({"running": False, "last_result": {
+                "id": job.get("strategy"),
+                "ok": False,
+                "interrupted": True,
+                "summary": "Esecuzione interrotta (processo riavviato). Dettagli in Cronologia.",
+                "job_id": job.get("id"),
+            }})
         return jsonify({
             "running": True,
-            "strategy_id": _running_strategy['id'],
-            "elapsed_sec": round(elapsed, 1),
-            "manual": _running_strategy['manual'],
+            "strategy_id": job.get("strategy"),
+            "elapsed_sec": round(age, 1),
+            "manual": True,
+            "job_id": job.get("id"),
+            "from_disk": True,
         })
+
+    if last_mem is not None:
+        return jsonify({"running": False, "last_result": last_mem})
+
+    if job and job.get("status") in ("done", "error", "interrupted"):
+        r = job.get("result", {}) or {}
+        if job["status"] == "interrupted":
+            ok, summary = False, (r.get("error") or "Esecuzione interrotta. Dettagli in Cronologia.")
+        else:
+            ok, summary = _summarize_result({**r, "duration_sec": job.get("duration_sec")})
+        return jsonify({"running": False, "last_result": {
+            "id": job.get("strategy"),
+            "ok": ok,
+            "interrupted": job["status"] == "interrupted",
+            "summary": summary,
+            "job_id": job.get("id"),
+        }})
+
+    return jsonify({"running": False})
 
 
 @app.route("/api/cancel-strategy", methods=["POST"])
@@ -986,9 +1051,9 @@ if __name__ == "__main__":
             "workers": 1,
             "threads": 4,
             "worker_class": "gthread",
-            # Riavvia worker dopo N richieste per liberare memoria (Python non restituisce RAM all'OS)
-            "max_requests": 200,
-            "max_requests_jitter": 30,
+            # NIENTE riciclo periodico del worker: ucciderebbe il thread di una
+            # strategia in corso. La RAM viene liberata con gc.collect().
+            "max_requests": 0,
             "timeout": 120,
             "keepalive": 2,
             "accesslog": "-",

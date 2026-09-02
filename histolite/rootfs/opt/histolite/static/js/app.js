@@ -211,10 +211,11 @@ function flashAfterReload(message, type = 'info') {
  * Ritorna l'oggetto last_result ({ ok, summary, ... }) oppure null.
  * Gli errori di rete transitori non interrompono il polling.
  */
-async function pollBackgroundStrategy({ intervalMs = 2000, onProgress = null } = {}) {
+async function pollBackgroundStrategy({ intervalMs = 2000, onProgress = null, maxMs = 40 * 60 * 1000 } = {}) {
   // Piccola attesa iniziale: dà tempo al worker di registrarsi come "running".
   await new Promise(r => setTimeout(r, 800));
-  while (true) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
     let status;
     try {
       status = await apiGet('/api/strategy-status', { timeout: 5000 });
@@ -229,6 +230,7 @@ async function pollBackgroundStrategy({ intervalMs = 2000, onProgress = null } =
     }
     return status.last_result || null;
   }
+  return null;  // timeout della fetch di stato: esito da controllare in Cronologia
 }
 
 /**
@@ -236,10 +238,14 @@ async function pollBackgroundStrategy({ intervalMs = 2000, onProgress = null } =
  */
 async function reportBackgroundStrategyAndReload() {
   const last = await pollBackgroundStrategy();
-  if (last && !last.ok) {
+  if (last && last.interrupted) {
+    flashAfterReload(`Strategia interrotta: ${last.summary}`, 'warning');
+  } else if (last && !last.ok) {
     flashAfterReload(`Strategia fallita: ${last.summary}`, 'danger');
+  } else if (last) {
+    flashAfterReload(`Strategia completata: ${last.summary}`, 'success');
   } else {
-    flashAfterReload(last ? `Strategia completata: ${last.summary}` : 'Strategia completata', 'success');
+    flashAfterReload('Esecuzione terminata senza esito noto — vedi Cronologia.', 'warning');
   }
   window.location.reload();
 }
