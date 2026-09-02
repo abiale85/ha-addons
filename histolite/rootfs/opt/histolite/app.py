@@ -81,6 +81,17 @@ logger.info(f"HistoLite avviato - DB backend={db.db_type} path={DB_PATH} - Port:
 # indipendentemente da quanti client/pagine fanno richieste simultanee.
 _overview_lock = threading.Lock()
 
+def _compute_overview() -> tuple[dict | None, str | None]:
+    """Ricalcola l'overview e la mette in cache. Ritorna (data, errore).
+    NON gestisce il lock: chi chiama deve gia' detenerlo (o non curarsene)."""
+    data = get_db_overview(db)
+    if "error" in data:
+        logger.warning(f"Calcolo overview errore: {data['error']}")
+        return None, str(data["error"])
+    cache.set("overview", data, ttl_seconds=None)
+    logger.info("Overview aggiornato in cache")
+    return data, None
+
 def _run_overview_bg():
     """Ricalcola l'overview in background. Un solo calcolo alla volta."""
     if not _overview_lock.acquire(blocking=False):
@@ -88,12 +99,7 @@ def _run_overview_bg():
         return
     try:
         logger.info("Background: avvio calcolo overview...")
-        data = get_db_overview(db)
-        if "error" not in data:
-            cache.set("overview", data, ttl_seconds=None)
-            logger.info("Background: overview aggiornato in cache")
-        else:
-            logger.warning(f"Background overview errore: {data['error']}")
+        _compute_overview()
     except Exception as e:
         logger.error(f"Background overview eccezione: {e}")
     finally:
@@ -467,9 +473,16 @@ def api_db_size():
 
 @app.route("/api/overview/refresh", methods=["POST"])
 def api_overview_refresh():
-    """Forza ricalcolo overview. Se gi\u00e0 in corso restituisce la cache attuale con computing=True."""
+    """Forza il ricalcolo dell'overview in modo sincrono.
+
+    Se un altro ricalcolo sta gia' girando (es. richiesta parallela) restituisce
+    la cache attuale con ``computing=True`` invece di attendere.
+    """
     try:
-        if _overview_lock.locked():
+        # acquisizione non bloccante: se qualcuno sta gia' ricalcolando, non
+        # accodarsi (evita il race lock<->thread della versione precedente,
+        # che poteva far saltare del tutto il calcolo).
+        if not _overview_lock.acquire(blocking=False):
             logger.info("Refresh richiesto ma overview gi\u00e0 in calcolo")
             cached = cache.get_with_metadata("overview")
             if cached:
@@ -481,22 +494,22 @@ def api_overview_refresh():
                 return jsonify(data)
             return jsonify({"error": "Calcolo gi\u00e0 in corso", "computing": True}), 202
 
-        cache.invalidate("overview")
-        threading.Thread(target=_run_overview_bg, name="overview-refresh", daemon=True).start()
-        # Aspetta al massimo 120s
-        if _overview_lock.acquire(timeout=120):
+        try:
+            cache.invalidate("overview")
+            data, err = _compute_overview()
+        finally:
             _overview_lock.release()
-        cached = cache.get_with_metadata("overview")
-        if cached:
-            data = dict(cached["value"])
-            data["cached"] = False
-            data["updated_timestamp"] = int(cached["timestamp_updated"])
-            data["age_seconds"] = 0
-            data["computing"] = False
-            return jsonify(data)
-        return jsonify({"error": "Timeout calcolo overview"}), 504
+
+        if err:
+            return jsonify({"error": err}), 500
+        resp = dict(data)
+        resp["cached"] = False
+        resp["updated_timestamp"] = int(time.time())
+        resp["age_seconds"] = 0
+        resp["computing"] = False
+        return jsonify(resp)
     except Exception as e:
-        logger.error(f"Errore refresh overview: {e}")
+        logger.error(f"Errore refresh overview: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

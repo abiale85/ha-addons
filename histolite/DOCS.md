@@ -223,6 +223,15 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 
 ## Changelog
 
+### 2.9.1
+- **Fix Dashboard – pulsante Aggiorna**: il ricalcolo dell'overview lanciava un
+  thread di background e poi tentava di acquisire lo stesso lock che il thread usa
+  come guardia "uno alla volta". Nella corsa il calcolo poteva essere saltato del
+  tutto (o la risposta arrivava prima) e la dashboard restava con i dati vecchi /
+  un errore di timeout. Ora il ricalcolo è sincrono sotto lock: l'endpoint
+  restituisce i dati appena aggiornati oppure l'errore reale. Alzato anche il
+  timeout lato client della chiamata di refresh.
+
 ### 2.9.0
 - **Nuova pagina Utility** con due strumenti:
   - **Salute statistiche**: analizza `statistics` / `statistics_short_term` e ripara (con

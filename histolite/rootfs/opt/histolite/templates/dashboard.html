@@ -451,7 +451,11 @@ async function refreshOverview() {
   document.getElementById('refresh-btn').disabled = true;
   showGlobalLoading('Aggiornamento statistiche in corso…');
   try {
-    const data = await apiPost('/api/overview/refresh', {});
+    // Il ricalcolo è sincrono lato server e su DB grandi può richiedere
+    // parecchio: timeout allineato a quello della GET /api/overview.
+    const data = await apiFetch('/api/overview/refresh', {
+      method: 'POST', body: '{}', timeout: 120000,
+    });
     if (data.computing) {
       showToast('Calcolo già in corso, riprova tra qualche secondo.', 'warning');
       if (data.total_states != null) {
