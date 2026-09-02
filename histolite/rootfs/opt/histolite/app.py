@@ -419,6 +419,11 @@ def jobs_page():
     return render_template("jobs.html", active="jobs", jobs=jobs)
 
 
+@app.route("/utility")
+def utility_page():
+    return render_template("utility.html", active="utility")
+
+
 # ---------------------------------------------------------------------------
 # API - Panoramica
 # ---------------------------------------------------------------------------
@@ -853,6 +858,71 @@ def api_statistics_short_term():
         data = db.get_statistics_short_term_stats()
         return jsonify(data)
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# API - Utility (salute statistiche, entità orfane, ri-associazione)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/statistics/health")
+def api_statistics_health():
+    try:
+        return jsonify(db.check_statistics_health())
+    except Exception as e:
+        logger.error(f"Errore statistics/health: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/statistics/repair", methods=["POST"])
+def api_statistics_repair():
+    try:
+        body = request.get_json(force=True) or {}
+        actions = body.get("actions", [])
+        dry_run = bool(body.get("dry_run", False))
+        result = db.repair_statistics(actions, dry_run=dry_run)
+        if not dry_run and not result.get("error"):
+            config_manager.save_job(result, "statistics_repair", [],
+                                    {"actions": actions}, dry_run=False)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Errore statistics/repair: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/orphan-entities", methods=["POST"])
+def api_orphan_entities():
+    try:
+        body = request.get_json(force=True) or {}
+        inactive_days = int(body.get("inactive_days", 30))
+        raw = body.get("valid_entity_ids") or []
+        if isinstance(raw, str):
+            raw = [line.strip() for line in raw.replace(",", "\n").splitlines()]
+        valid = [e for e in raw if e] or None
+        return jsonify(db.list_orphan_entities(inactive_days=inactive_days,
+                                               valid_entity_ids=valid))
+    except Exception as e:
+        logger.error(f"Errore orphan-entities: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/entities/merge", methods=["POST"])
+def api_entities_merge():
+    try:
+        body = request.get_json(force=True) or {}
+        source = body.get("source", "")
+        target = body.get("target", "")
+        include_statistics = bool(body.get("include_statistics", True))
+        dry_run = bool(body.get("dry_run", False))
+        result = db.merge_entity_history(source, target,
+                                        include_statistics=include_statistics,
+                                        dry_run=dry_run)
+        if not dry_run and not result.get("error"):
+            config_manager.save_job(result, "entity_merge", [source, target],
+                                    {"include_statistics": include_statistics}, dry_run=False)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Errore entities/merge: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

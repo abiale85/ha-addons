@@ -45,6 +45,18 @@ HistoLite analizza il database SQLite di Home Assistant (`home-assistant_v2.db`)
 - Supporto wildcard nelle entità, ad esempio `device_tracker.*` o `sensor.casa_?`
 - Esecuzione one-click delle strategie salvate
 
+### Utility *(nuovo)*
+- **Salute statistiche**: controlli generali su `statistics` e `statistics_short_term`
+  (righe orfane senza `statistics_meta`, meta di sensori eliminati, duplicati
+  `(metadata_id, start_ts)`, righe con timestamp nel futuro) con anteprima + riparazione
+  selettiva. Non modifica i valori delle statistiche.
+- **Entità orfane e ri-associazione**: elenca gli `entity_id` in `states_meta` non più
+  attivi (inattività da N giorni, opzionale whitelist incollata da HA) con suggerimento
+  del possibile sensore sostituto; permette di **ri-associare** la storia di un sensore
+  sostituito a quello nuovo — rename se il nuovo nome non ha ancora dati nel recorder,
+  altrimenti merge di `states` + `statistics` + `statistics_short_term` (su collisione
+  `(metadata_id, start_ts)` tiene la riga del target).
+
 ### Cronologia
 - Log completo di tutte le operazioni eseguite
 - Dettaglio parametri, entità coinvolte, record eliminati, backup creati
@@ -210,6 +222,21 @@ HistoLite è progettato per funzionare con database di grandi dimensioni (>10M r
 ---
 
 ## Changelog
+
+### 2.9.0
+- **Nuova pagina Utility** con due strumenti:
+  - **Salute statistiche**: analizza `statistics` / `statistics_short_term` e ripara (con
+    anteprima) righe orfane senza meta, meta di sensori eliminati (`source='recorder'` con
+    `statistic_id` non più in `states_meta`), duplicati `(metadata_id, start_ts)` (tiene la
+    riga più recente) e righe con `start_ts` nel futuro.
+  - **Entità orfane e ri-associazione**: elenco degli `entity_id` non più attivi
+    (euristica per inattività + whitelist opzionale, dato che l'add-on non ha accesso al
+    registro entità di HA) con suggerimento del sensore sostituto, e ri-associazione della
+    storia sensore-rotto → sensore-nuovo (rename oppure merge di `states` + statistiche,
+    con gestione delle collisioni temporali).
+- **Fix**: `get_statistics_short_term_stats` e la purge per-entità di
+  `statistics_short_term` facevano JOIN sulla tabella `statistics_metadata`, inesistente
+  nello schema moderno di HA (è `statistics_meta`): il percorso per-entità era muto.
 
 ### 2.8.0
 - **Purge Adattivo – fasce generiche**: le tre soglie fisse (orario / giornaliero /

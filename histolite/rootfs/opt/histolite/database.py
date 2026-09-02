@@ -1912,7 +1912,7 @@ class HaDatabase:
                         MIN(sst.start_ts) AS first_ts,
                         MAX(sst.start_ts) AS last_ts
                     FROM statistics_short_term sst
-                    JOIN statistics_metadata sm ON sst.metadata_id = sm.id
+                    JOIN statistics_meta sm ON sst.metadata_id = sm.id
                     GROUP BY sm.statistic_id
                     ORDER BY record_count DESC
                 """).fetchall()
@@ -1933,7 +1933,7 @@ class HaDatabase:
                 if entity_ids:
                     placeholders = ",".join("?" * len(entity_ids))
                     meta_ids = conn.execute(
-                        f"SELECT id FROM statistics_metadata "
+                        f"SELECT id FROM statistics_meta "
                         f"WHERE statistic_id IN ({placeholders})",
                         entity_ids,
                     ).fetchall()
@@ -1969,6 +1969,393 @@ class HaDatabase:
             except self._db_errors as e:
                 logger.error(f"Errore purge statistics_short_term: {e}")
                 return {"deleted": 0, "error": str(e), "dry_run": dry_run}
+
+    # ------------------------------------------------------------------
+    # Salute statistiche (statistics / statistics_short_term / statistics_meta)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _scalar(row, key: str, default=0):
+        try:
+            v = row[key] if row is not None else None
+        except (KeyError, IndexError, TypeError):
+            v = None
+        return default if v is None else v
+
+    def _count(self, conn, sql: str, params=()) -> int:
+        try:
+            row = conn.execute(sql, params).fetchone()
+        except self._db_errors:
+            return 0
+        return int(self._scalar(row, "c", 0))
+
+    def _batched_delete(self, conn, table: str, where: str, params, batch_size: int = 5000,
+                        id_col: str = "id") -> int:
+        """Elimina in batch da `table` le righe che soddisfano `where` (con placeholder
+        posizionali in `params`). Restituisce il totale eliminato."""
+        total = 0
+        params = list(params)
+        while True:
+            rows = conn.execute(
+                f"SELECT {id_col} FROM {table} WHERE {where} LIMIT ?", params + [batch_size]
+            ).fetchall()
+            if not rows:
+                break
+            ids = [r[id_col] for r in rows]
+            ph = ",".join("?" * len(ids))
+            conn.execute(f"DELETE FROM {table} WHERE {id_col} IN ({ph})", ids)
+            conn.commit()
+            total += len(ids)
+            if len(ids) < batch_size:
+                break
+            time.sleep(0.2)
+        return total
+
+    def check_statistics_health(self) -> dict:
+        """Report (sola lettura) sullo stato di statistics / statistics_short_term."""
+        now = time.time()
+        out = {
+            "available": False, "tables": {}, "span": {},
+            "orphan_rows": {}, "orphan_meta": [], "duplicates": {}, "future_rows": {},
+        }
+        with self._connect(read_only=True) as conn:
+            if not self._table_exists(conn, "statistics_meta"):
+                return out
+            out["available"] = True
+            out["tables"]["statistics_meta"] = self._count(
+                conn, "SELECT COUNT(*) AS c FROM statistics_meta")
+            present = [t for t in ("statistics", "statistics_short_term")
+                       if self._table_exists(conn, t)]
+            for t in present:
+                try:
+                    out["tables"][t] = self._count(conn, f"SELECT COUNT(*) AS c FROM {t}")
+                    srow = conn.execute(
+                        f"SELECT MIN(start_ts) AS a, MAX(start_ts) AS b FROM {t}").fetchone()
+                    out["span"][t] = [self._scalar(srow, "a", None), self._scalar(srow, "b", None)]
+                    out["orphan_rows"][t] = self._count(
+                        conn,
+                        f"SELECT COUNT(*) AS c FROM {t} "
+                        f"WHERE metadata_id NOT IN (SELECT id FROM statistics_meta)")
+                    out["future_rows"][t] = self._count(
+                        conn, f"SELECT COUNT(*) AS c FROM {t} WHERE start_ts > ?", (now,))
+                    drow = conn.execute(
+                        f"SELECT COUNT(*) AS groups, COALESCE(SUM(c),0) - COUNT(*) AS extra FROM "
+                        f"(SELECT COUNT(*) AS c FROM {t} GROUP BY metadata_id, start_ts "
+                        f" HAVING COUNT(*) > 1)"
+                    ).fetchone()
+                    out["duplicates"][t] = {
+                        "groups": int(self._scalar(drow, "groups", 0)),
+                        "extra_rows": int(self._scalar(drow, "extra", 0)),
+                    }
+                except self._db_errors as e:
+                    logger.warning(f"check_statistics_health {t}: {e}")
+
+            # Meta orfane: sensori eliminati che hanno lasciato la loro statistics_meta.
+            try:
+                metas = conn.execute(
+                    "SELECT id, statistic_id, source FROM statistics_meta "
+                    "WHERE source = 'recorder' "
+                    "AND statistic_id NOT IN (SELECT entity_id FROM states_meta)"
+                ).fetchall()
+                ids = [m["id"] for m in metas]
+                sc: dict = {}
+                stc: dict = {}
+                if ids:
+                    ph = ",".join("?" * len(ids))
+                    if "statistics" in present:
+                        sc = {r["metadata_id"]: r["c"] for r in conn.execute(
+                            f"SELECT metadata_id, COUNT(*) AS c FROM statistics "
+                            f"WHERE metadata_id IN ({ph}) GROUP BY metadata_id", ids).fetchall()}
+                    if "statistics_short_term" in present:
+                        stc = {r["metadata_id"]: r["c"] for r in conn.execute(
+                            f"SELECT metadata_id, COUNT(*) AS c FROM statistics_short_term "
+                            f"WHERE metadata_id IN ({ph}) GROUP BY metadata_id", ids).fetchall()}
+                out["orphan_meta"] = [
+                    {"id": m["id"], "statistic_id": m["statistic_id"], "source": m["source"],
+                     "rows_statistics": int(sc.get(m["id"], 0)),
+                     "rows_short_term": int(stc.get(m["id"], 0))}
+                    for m in metas
+                ]
+            except self._db_errors as e:
+                logger.warning(f"check_statistics_health orphan_meta: {e}")
+        return out
+
+    def repair_statistics(self, actions, dry_run: bool = False, batch_size: int = 5000) -> dict:
+        """Ripara i problemi individuati da check_statistics_health.
+
+        actions ⊆ {"orphan_rows", "orphan_meta", "duplicates", "future_rows"}.
+        """
+        self._validate_schema_for_write()
+        valid = {"orphan_rows", "orphan_meta", "duplicates", "future_rows"}
+        actions = [a for a in (actions or []) if a in valid]
+        if not actions:
+            return {"error": "Nessuna azione valida specificata", "dry_run": dry_run}
+
+        now = time.time()
+        out = {"dry_run": dry_run, "actions": {}}
+        with self._connect(read_only=dry_run) as conn:
+            if not self._table_exists(conn, "statistics_meta"):
+                return {"error": "Tabelle statistics non presenti", "dry_run": dry_run}
+            tables = [t for t in ("statistics", "statistics_short_term")
+                      if self._table_exists(conn, t)]
+
+            def _apply(where: str, params, per_table_where=None) -> dict:
+                res = {}
+                for t in tables:
+                    w = per_table_where(t) if per_table_where else where
+                    if dry_run:
+                        res[t] = self._count(
+                            conn, f"SELECT COUNT(*) AS c FROM {t} WHERE {w}", params)
+                    else:
+                        res[t] = self._batched_delete(conn, t, w, params, batch_size)
+                return res
+
+            if "orphan_rows" in actions:
+                out["actions"]["orphan_rows"] = _apply(
+                    "metadata_id NOT IN (SELECT id FROM statistics_meta)", ())
+
+            if "future_rows" in actions:
+                out["actions"]["future_rows"] = _apply("start_ts > ?", (now,))
+
+            if "duplicates" in actions:
+                out["actions"]["duplicates"] = _apply(
+                    "", (),
+                    per_table_where=lambda t: (
+                        f"EXISTS (SELECT 1 FROM {t} d WHERE d.metadata_id = {t}.metadata_id "
+                        f"AND d.start_ts = {t}.start_ts AND d.id > {t}.id)"
+                    ),
+                )
+
+            if "orphan_meta" in actions:
+                metas = conn.execute(
+                    "SELECT id FROM statistics_meta WHERE source = 'recorder' "
+                    "AND statistic_id NOT IN (SELECT entity_id FROM states_meta)"
+                ).fetchall()
+                ids = [m["id"] for m in metas]
+                res = {"meta": len(ids)}
+                if ids:
+                    ph = ",".join("?" * len(ids))
+                    for t in tables:
+                        if dry_run:
+                            res[t] = self._count(
+                                conn, f"SELECT COUNT(*) AS c FROM {t} "
+                                f"WHERE metadata_id IN ({ph})", ids)
+                        else:
+                            res[t] = self._batched_delete(
+                                conn, t, f"metadata_id IN ({ph})", ids, batch_size)
+                    if not dry_run:
+                        conn.execute(f"DELETE FROM statistics_meta WHERE id IN ({ph})", ids)
+                        conn.commit()
+                out["actions"]["orphan_meta"] = res
+        return out
+
+    # ------------------------------------------------------------------
+    # Entità orfane e ri-associazione storia (sostituzione sensore)
+    # ------------------------------------------------------------------
+
+    def list_orphan_entities(self, inactive_days: int = 30,
+                             valid_entity_ids=None) -> dict:
+        """Elenca le entità in states_meta non più attive.
+
+        Euristica (nessun accesso al registro entità di HA): 'inactive' se l'ultimo
+        record è più vecchio di `inactive_days`; 'removed' se è fornita una whitelist
+        (`valid_entity_ids`) e l'entità non vi compare. Per ogni orfano prova a
+        suggerire il possibile sensore sostituto.
+        """
+        import re
+        schema = self.get_schema_info()
+        ts_col = "last_updated_ts" if schema["uses_ts"] else "last_updated"
+        whitelist = None
+        if valid_entity_ids:
+            whitelist = {str(e).strip() for e in valid_entity_ids if str(e).strip()}
+        cutoff = time.time() - max(0, int(inactive_days)) * 86400
+
+        with self._connect(read_only=True) as conn:
+            self._set_busy_timeout(conn, 30000)
+            rows = conn.execute(
+                f"SELECT sm.entity_id AS entity_id, COUNT(s.state_id) AS rc, "
+                f"MAX(s.{ts_col}) AS last_ts "
+                f"FROM states_meta sm LEFT JOIN states s ON s.metadata_id = sm.metadata_id "
+                f"GROUP BY sm.entity_id"
+            ).fetchall()
+
+        entities = []
+        for r in rows:
+            last_ts = r["last_ts"]
+            if last_ts is not None and not schema["uses_ts"]:
+                try:
+                    from datetime import datetime as _dt
+                    last_ts = _dt.fromisoformat(str(last_ts).replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    last_ts = None
+            eid = r["entity_id"]
+            if whitelist is not None and eid not in whitelist:
+                status = "removed"
+            elif last_ts is None or last_ts < cutoff:
+                status = "inactive"
+            else:
+                status = "active"
+            entities.append({"entity_id": eid, "record_count": int(r["rc"] or 0),
+                             "last_ts": last_ts, "status": status})
+
+        active_ids = {e["entity_id"] for e in entities if e["status"] == "active"}
+
+        def _suggest(orphan_id: str):
+            base = re.sub(r"_\d+$", "", orphan_id)
+            if base != orphan_id and base in active_ids:
+                return base
+            for k in range(2, 7):
+                cand = f"{base}_{k}"
+                if cand != orphan_id and cand in active_ids:
+                    return cand
+            for a in active_ids:
+                if re.sub(r"_\d+$", "", a) == orphan_id:
+                    return a
+            return None
+
+        orphans = []
+        for e in entities:
+            if e["status"] == "active":
+                continue
+            orphans.append({**e, "suggested_target": _suggest(e["entity_id"])})
+        orphans.sort(key=lambda x: x["record_count"], reverse=True)
+
+        return {
+            "inactive_days": int(inactive_days),
+            "has_whitelist": whitelist is not None,
+            "total_meta": len(entities),
+            "active_count": len(active_ids),
+            "orphans": orphans,
+        }
+
+    def _merge_statistics(self, conn, source: str, target: str, dry_run: bool, result: dict) -> None:
+        srow = conn.execute(
+            "SELECT id FROM statistics_meta WHERE statistic_id = ?", (source,)).fetchone()
+        if srow is None:
+            return
+        src_sid = srow["id"]
+        trow = conn.execute(
+            "SELECT id FROM statistics_meta WHERE statistic_id = ?", (target,)).fetchone()
+        tgt_sid = trow["id"] if trow else None
+
+        for table, moved_key, drop_key in (
+            ("statistics", "stats_moved", "stats_dropped_collision"),
+            ("statistics_short_term", "short_term_moved", "short_term_dropped_collision"),
+        ):
+            if not self._table_exists(conn, table):
+                continue
+            total = self._count(
+                conn, f"SELECT COUNT(*) AS c FROM {table} WHERE metadata_id = ?", (src_sid,))
+            if tgt_sid is None:
+                result[moved_key] = total
+                continue
+            collide = self._count(
+                conn,
+                f"SELECT COUNT(*) AS c FROM {table} WHERE metadata_id = ? "
+                f"AND start_ts IN (SELECT start_ts FROM {table} WHERE metadata_id = ?)",
+                (src_sid, tgt_sid),
+            )
+            result[drop_key] = collide
+            result[moved_key] = max(0, total - collide)
+            if not dry_run:
+                conn.execute(
+                    f"DELETE FROM {table} WHERE metadata_id = ? "
+                    f"AND start_ts IN (SELECT start_ts FROM {table} WHERE metadata_id = ?)",
+                    (src_sid, tgt_sid),
+                )
+                conn.execute(
+                    f"UPDATE {table} SET metadata_id = ? WHERE metadata_id = ?",
+                    (tgt_sid, src_sid),
+                )
+                conn.commit()
+
+        if not dry_run:
+            if tgt_sid is None:
+                conn.execute(
+                    "UPDATE statistics_meta SET statistic_id = ? WHERE id = ?",
+                    (target, src_sid),
+                )
+            else:
+                conn.execute("DELETE FROM statistics_meta WHERE id = ?", (src_sid,))
+            conn.commit()
+
+    def merge_entity_history(self, source: str, target: str,
+                             include_statistics: bool = True,
+                             dry_run: bool = False, batch_size: int = 5000) -> dict:
+        """Ri-associa la storia del sensore `source` (rotto/sostituito) a `target`.
+
+        - Se `target` non esiste ancora in states_meta → rename puro.
+        - Altrimenti → merge: ripunta states.metadata_id, elimina la states_meta
+          sorgente; se `include_statistics`, sposta anche statistics /
+          statistics_short_term (su collisione (metadata_id, start_ts) tiene la riga
+          del target) ed elimina la statistics_meta sorgente.
+        """
+        self._validate_schema_for_write()
+        source = str(source or "").strip()
+        target = str(target or "").strip()
+        result = {
+            "source": source, "target": target, "include_statistics": bool(include_statistics),
+            "dry_run": dry_run, "mode": None, "states_moved": 0, "source_meta_removed": False,
+            "stats_moved": 0, "stats_dropped_collision": 0,
+            "short_term_moved": 0, "short_term_dropped_collision": 0,
+        }
+        if not source or not target or source == target:
+            return {**result, "error": "Sorgente e target devono essere diversi e non vuoti"}
+
+        with self._connect(read_only=dry_run) as conn:
+            srow = conn.execute(
+                "SELECT metadata_id FROM states_meta WHERE entity_id = ?", (source,)).fetchone()
+            if srow is None:
+                return {**result, "error": f"Entità sorgente non trovata: {source}"}
+            source_meta = srow["metadata_id"]
+            trow = conn.execute(
+                "SELECT metadata_id FROM states_meta WHERE entity_id = ?", (target,)).fetchone()
+            target_meta = trow["metadata_id"] if trow else None
+
+            result["states_moved"] = self._count(
+                conn, "SELECT COUNT(*) AS c FROM states WHERE metadata_id = ?", (source_meta,))
+
+            if target_meta is None:
+                result["mode"] = "rename"
+                if not dry_run:
+                    conn.execute(
+                        "UPDATE states_meta SET entity_id = ? WHERE metadata_id = ?",
+                        (target, source_meta),
+                    )
+                    conn.commit()
+            else:
+                result["mode"] = "merge"
+                result["source_meta_removed"] = True
+                if not dry_run:
+                    while True:
+                        rows = conn.execute(
+                            "SELECT state_id FROM states WHERE metadata_id = ? LIMIT ?",
+                            (source_meta, batch_size),
+                        ).fetchall()
+                        if not rows:
+                            break
+                        ids = [r["state_id"] for r in rows]
+                        ph = ",".join("?" * len(ids))
+                        conn.execute(
+                            f"UPDATE states SET metadata_id = ? WHERE state_id IN ({ph})",
+                            [target_meta] + ids,
+                        )
+                        conn.commit()
+                        if len(ids) < batch_size:
+                            break
+                        time.sleep(0.2)
+                    conn.execute(
+                        "DELETE FROM states_meta WHERE metadata_id = ?", (source_meta,))
+                    conn.commit()
+
+            if include_statistics and self._table_exists(conn, "statistics_meta"):
+                try:
+                    self._merge_statistics(conn, source, target, dry_run, result)
+                except self._db_errors as e:
+                    logger.warning(f"merge_entity_history statistics: {e}")
+                    result["statistics_error"] = str(e)
+
+        return result
 
     # ------------------------------------------------------------------
     # Manutenzione

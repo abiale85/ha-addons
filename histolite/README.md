@@ -8,6 +8,7 @@ Supporta SQLite, PostgreSQL e MariaDB; TimescaleDB viene usato tramite il backen
 - **Dashboard** con Top 10 sensori, dimensione DB e distribuzione tabelle
 - **5 strategie** di alleggerimento: Purge Semplice, Purge Adattivo, Rimozione Anomalie, Picco per Bucket, Deduplica Valori
 - Purge Adattivo a **fasce libere**, bucket *ogni X min/ore/giorni/settimane* e **aggregazione a scelta** (media pesata, mediana, moda, percentile…); Deduplica con *preserva 1 valore ogni …*
+- Pagina **Utility**: salute di `statistics`/`statistics_short_term` (orfani, duplicati, righe future) e **ri-associazione** della storia di un sensore sostituito a quello nuovo
 - **Anteprima dry-run** prima di ogni operazione
 - **Backup automatico** del database prima di modifiche
 - **Interfaccia completamente italiana** accessibile via HA Ingress

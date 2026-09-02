@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+{% block title %}- Utility{% endblock %}
+{% block page_title %}<i class="bi bi-wrench-adjustable me-2"></i>Utility{% endblock %}
+
+{% block content %}
+<style>
+  .util-block { border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 1rem; }
+  .util-block + .util-block { margin-top: 1rem; }
+  .util-metric { font-size: 1.4rem; font-weight: 600; }
+  .issue-row { display: flex; align-items: flex-start; gap: .6rem; padding: .5rem 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+  .issue-row:last-child { border-bottom: 0; }
+  #orphan-table td { vertical-align: middle; }
+</style>
+
+<div class="row g-4">
+  <!-- =========================== Salute statistiche =========================== -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-activity me-2"></i>Salute statistiche</span>
+        <button class="btn btn-sm btn-outline-info" id="btn-analyze-stats">
+          <i class="bi bi-search me-1"></i>Analizza
+        </button>
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          Controlli generali su <code>statistics</code> e <code>statistics_short_term</code>:
+          righe orfane (senza <code>statistics_meta</code>), meta di sensori eliminati,
+          duplicati <code>(metadata_id, start_ts)</code> e righe con timestamp nel futuro.
+          Non modifica i valori delle statistiche.
+        </p>
+        <div id="stats-health-result" class="text-muted small">Premi <strong>Analizza</strong> per iniziare.</div>
+        <div id="stats-repair-area" class="mt-3 d-none">
+          <div class="d-flex gap-2 flex-wrap">
+            <button class="btn btn-sm btn-outline-secondary" id="btn-stats-preview">
+              <i class="bi bi-eye me-1"></i>Anteprima riparazione
+            </button>
+            <button class="btn btn-sm btn-danger" id="btn-stats-repair">
+              <i class="bi bi-tools me-1"></i>Ripara selezionati
+            </button>
+          </div>
+          <div id="stats-repair-result" class="small text-muted mt-2"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Entità orfane e ri-associazione ================= -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <i class="bi bi-link-45deg me-2"></i>Entità orfane e ri-associazione storia
+      </div>
+      <div class="card-body">
+        <div class="alert alert-warning py-2 small">
+          <i class="bi bi-exclamation-triangle me-1"></i>
+          La ri-associazione modifica in modo <strong>irreversibile</strong> il database del
+          recorder. Esegui un backup di Home Assistant prima di procedere. Consigliato a
+          recorder fermo o con poco traffico.
+        </div>
+
+        <div class="util-block">
+          <div class="row g-2 align-items-end">
+            <div class="col-6 col-md-3">
+              <label class="form-label small mb-0">Inattività da almeno</label>
+              <div class="input-group input-group-sm">
+                <input type="number" class="form-control" id="inactive-days" value="30" min="0">
+                <span class="input-group-text">giorni</span>
+              </div>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label small mb-0">
+                Whitelist entità valide <span class="text-muted">(opzionale, una per riga, incollata da HA)</span>
+              </label>
+              <textarea class="form-control form-control-sm" id="valid-entities" rows="1"
+                        placeholder="sensor.temperatura_salotto&#10;sensor.consumo_totale"></textarea>
+            </div>
+            <div class="col-6 col-md-3">
+              <button class="btn btn-sm btn-outline-primary w-100" id="btn-list-orphans">
+                <i class="bi bi-list-ul me-1"></i>Elenca orfane
+              </button>
+            </div>
+          </div>
+          <div id="orphan-result" class="small text-muted mt-3">
+            Nessun elenco caricato.
+          </div>
+        </div>
+
+        <!-- Form merge -->
+        <div class="util-block">
+          <h6 class="mb-2"><i class="bi bi-arrow-left-right me-1"></i>Ri-associa storia</h6>
+          <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-4">
+              <label class="form-label small mb-0">Sensore sorgente (rotto/sostituito)</label>
+              <input type="text" class="form-control form-control-sm" id="merge-source"
+                     placeholder="sensor.vecchio">
+            </div>
+            <div class="col-12 col-md-4">
+              <label class="form-label small mb-0">Sensore target (nuovo)</label>
+              <input type="text" class="form-control form-control-sm" id="merge-target"
+                     list="merge-target-list" placeholder="sensor.nuovo" autocomplete="off">
+              <datalist id="merge-target-list"></datalist>
+            </div>
+            <div class="col-12 col-md-4">
+              <div class="form-check">
+                <input type="checkbox" class="form-check-input" id="merge-stats" checked>
+                <label class="form-check-label small" for="merge-stats">
+                  Includi <code>statistics</code> / <code>statistics_short_term</code>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="d-flex gap-2 flex-wrap mt-2">
+            <button class="btn btn-sm btn-outline-secondary" id="btn-merge-preview">
+              <i class="bi bi-eye me-1"></i>Anteprima
+            </button>
+            <button class="btn btn-sm btn-danger" id="btn-merge-exec">
+              <i class="bi bi-play-fill me-1"></i>Esegui ri-associazione
+            </button>
+          </div>
+          <div id="merge-result" class="small text-muted mt-2">
+            Se il target non esiste ancora nel recorder viene fatto un <em>rename</em>;
+            altrimenti la storia della sorgente viene <em>unita</em> a quella del target.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ------------------------------------------------------------------ Statistiche
+let _statsHealth = null;
+
+function _issueRow(action, label, count, detail) {
+  const enabled = count > 0;
+  return `
+    <div class="issue-row">
+      <input type="checkbox" class="form-check-input mt-1 js-stat-action" value="${action}"
+             ${enabled ? '' : 'disabled'} ${enabled ? 'checked' : ''}>
+      <div>
+        <div><strong>${label}</strong>
+          <span class="badge ${enabled ? 'bg-danger' : 'bg-secondary'} ms-1">${fmt(count)}</span>
+        </div>
+        <div class="text-muted">${detail}</div>
+      </div>
+    </div>`;
+}
+
+async function analyzeStats() {
+  const el = document.getElementById('stats-health-result');
+  el.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Analisi in corso…';
+  try {
+    const h = await apiGet('/api/statistics/health');
+    _statsHealth = h;
+    if (!h.available) {
+      el.innerHTML = '<span class="text-muted">Tabelle statistiche non presenti in questo database.</span>';
+      document.getElementById('stats-repair-area').classList.add('d-none');
+      return;
+    }
+    const t = h.tables || {};
+    const orphanRows = (h.orphan_rows?.statistics || 0) + (h.orphan_rows?.statistics_short_term || 0);
+    const orphanMeta = (h.orphan_meta || []);
+    const orphanMetaRows = orphanMeta.reduce((s, m) => s + (m.rows_statistics || 0) + (m.rows_short_term || 0), 0);
+    const dupExtra = (h.duplicates?.statistics?.extra_rows || 0) + (h.duplicates?.statistics_short_term?.extra_rows || 0);
+    const future = (h.future_rows?.statistics || 0) + (h.future_rows?.statistics_short_term || 0);
+
+    el.innerHTML = `
+      <div class="row g-3 mb-3">
+        <div class="col-4 col-md-2"><div class="text-muted">statistics</div><div class="util-metric">${fmt(t.statistics || 0)}</div></div>
+        <div class="col-4 col-md-2"><div class="text-muted">short_term</div><div class="util-metric">${fmt(t.statistics_short_term || 0)}</div></div>
+        <div class="col-4 col-md-2"><div class="text-muted">meta</div><div class="util-metric">${fmt(t.statistics_meta || 0)}</div></div>
+      </div>
+      ${_issueRow('orphan_rows', 'Righe senza meta', orphanRows,
+          'Righe di statistics / short_term il cui <code>metadata_id</code> non esiste in <code>statistics_meta</code>.')}
+      ${_issueRow('orphan_meta', 'Meta di sensori eliminati', orphanMeta.length,
+          orphanMeta.length
+            ? `${fmt(orphanMetaRows)} righe collegate. Es.: ${orphanMeta.slice(0,5).map(m => `<code>${m.statistic_id}</code>`).join(', ')}${orphanMeta.length > 5 ? '…' : ''}`
+            : 'Nessuna <code>statistics_meta</code> con <code>source=recorder</code> orfana.')}
+      ${_issueRow('duplicates', 'Righe duplicate (metadata_id, start_ts)', dupExtra,
+          'Righe extra oltre la prima per la stessa chiave. La riparazione tiene la più recente.')}
+      ${_issueRow('future_rows', 'Righe con timestamp nel futuro', future,
+          '<code>start_ts</code> maggiore di adesso.')}
+    `;
+    document.getElementById('stats-repair-area').classList.toggle('d-none',
+      !(orphanRows || orphanMeta.length || dupExtra || future));
+    document.getElementById('stats-repair-result').textContent = '';
+  } catch (e) {
+    el.innerHTML = `<span class="text-danger">${e.message}</span>`;
+  }
+}
+
+function _selectedStatActions() {
+  return [...document.querySelectorAll('.js-stat-action:checked')].map(c => c.value);
+}
+
+async function repairStats(dryRun) {
+  const actions = _selectedStatActions();
+  if (!actions.length) { showToast('Seleziona almeno un problema da riparare', 'warning'); return; }
+  if (!dryRun && !confirm(`Applicare le riparazioni selezionate (${actions.join(', ')})?\nOperazione irreversibile.`)) return;
+  const out = document.getElementById('stats-repair-result');
+  out.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>…';
+  try {
+    const r = await apiPost('/api/statistics/repair', { actions, dry_run: dryRun });
+    if (r.error) { out.innerHTML = `<span class="text-danger">${r.error}</span>`; return; }
+    const parts = Object.entries(r.actions || {}).map(([k, v]) => {
+      const n = typeof v === 'object'
+        ? Object.entries(v).map(([kk, vv]) => `${kk}=${fmt(vv)}`).join(' ')
+        : fmt(v);
+      return `<div><code>${k}</code>: ${n}</div>`;
+    });
+    out.innerHTML = `<span class="${dryRun ? 'text-info' : 'text-success'}">`
+      + `${dryRun ? 'Stima' : 'Eseguito'}:</span>${parts.join('')}`;
+    if (!dryRun) { showToast('Riparazione statistiche completata', 'success'); analyzeStats(); }
+  } catch (e) {
+    out.innerHTML = `<span class="text-danger">${e.message}</span>`;
+  }
+}
+
+// ------------------------------------------------------------ Entità orfane
+function _statusBadge(s) {
+  if (s === 'removed') return '<span class="badge bg-danger">rimossa</span>';
+  if (s === 'inactive') return '<span class="badge bg-warning text-dark">inattiva</span>';
+  return '<span class="badge bg-secondary">attiva</span>';
+}
+
+async function listOrphans() {
+  const el = document.getElementById('orphan-result');
+  el.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Ricerca…';
+  try {
+    const body = {
+      inactive_days: parseInt(document.getElementById('inactive-days').value, 10) || 30,
+      valid_entity_ids: document.getElementById('valid-entities').value || '',
+    };
+    const r = await apiPost('/api/orphan-entities', body);
+    if (r.error) { el.innerHTML = `<span class="text-danger">${r.error}</span>`; return; }
+    if (!r.orphans.length) {
+      el.innerHTML = `<span class="text-success">Nessuna entità orfana `
+        + `(${fmt(r.active_count)} attive su ${fmt(r.total_meta)}).</span>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="mb-2">${fmt(r.orphans.length)} entità orfane su ${fmt(r.total_meta)} totali`
+        + `${r.has_whitelist ? ' · whitelist attiva' : ''}.</div>
+      <div class="table-responsive">
+        <table class="table table-sm table-dark align-middle" id="orphan-table">
+          <thead><tr>
+            <th>entity_id</th><th class="text-end">record</th><th>ultimo dato</th>
+            <th>stato</th><th>target suggerito</th><th></th>
+          </tr></thead>
+          <tbody>
+          ${r.orphans.map(o => `
+            <tr>
+              <td><code>${o.entity_id}</code></td>
+              <td class="text-end">${fmt(o.record_count)}</td>
+              <td class="text-muted small">${o.last_ts ? fmtTs(o.last_ts) : '—'}</td>
+              <td>${_statusBadge(o.status)}</td>
+              <td>${o.suggested_target ? `<code>${o.suggested_target}</code>` : '<span class="text-muted">—</span>'}</td>
+              <td class="text-end">
+                <button class="btn btn-xs btn-outline-primary js-reassoc"
+                        data-source="${o.entity_id}" data-target="${o.suggested_target || ''}">
+                  Ri-associa
+                </button>
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<span class="text-danger">${e.message}</span>`;
+  }
+}
+
+// --------------------------------------------------------------- Merge
+async function mergeCall(dryRun) {
+  const source = document.getElementById('merge-source').value.trim();
+  const target = document.getElementById('merge-target').value.trim();
+  if (!source || !target) { showToast('Compila sorgente e target', 'warning'); return; }
+  if (!dryRun && !confirm(`Ri-associare la storia di "${source}" a "${target}"?\nOperazione irreversibile.`)) return;
+  const out = document.getElementById('merge-result');
+  out.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>…';
+  try {
+    const r = await apiPost('/api/entities/merge', {
+      source, target,
+      include_statistics: document.getElementById('merge-stats').checked,
+      dry_run: dryRun,
+    });
+    if (r.error) { out.innerHTML = `<span class="text-danger">${r.error}</span>`; return; }
+    const lines = [
+      `modalità: <strong>${r.mode}</strong>`,
+      `states ${r.mode === 'merge' ? 'spostati' : 'rinominati'}: ${fmt(r.states_moved)}`,
+    ];
+    if (r.include_statistics) {
+      lines.push(`statistics: ${fmt(r.stats_moved)} spostate` +
+        (r.stats_dropped_collision ? `, ${fmt(r.stats_dropped_collision)} scartate (collisione)` : ''));
+      lines.push(`short_term: ${fmt(r.short_term_moved)} spostate` +
+        (r.short_term_dropped_collision ? `, ${fmt(r.short_term_dropped_collision)} scartate` : ''));
+    }
+    if (r.mode === 'merge') lines.push('la meta sorgente verrà rimossa');
+    out.innerHTML = `<span class="${dryRun ? 'text-info' : 'text-success'}">`
+      + `${dryRun ? 'Anteprima' : 'Completato'}:</span> ${lines.join(' · ')}`;
+    if (!dryRun) { showToast('Ri-associazione completata', 'success'); listOrphans(); }
+  } catch (e) {
+    out.innerHTML = `<span class="text-danger">${e.message}</span>`;
+  }
+}
+
+// ---------------------------------------------------------- Autocomplete target
+let _targetCtrl = null;
+async function fillTargetSuggestions() {
+  const q = document.getElementById('merge-target').value.trim();
+  if (q.length < 2) return;
+  if (_targetCtrl) _targetCtrl.abort();
+  _targetCtrl = new AbortController();
+  try {
+    const rows = await apiFetch(`/api/sensors/list?search=${encodeURIComponent(q)}`,
+      { signal: _targetCtrl.signal, timeout: 10000 });
+    document.getElementById('merge-target-list').innerHTML =
+      (rows || []).slice(0, 12).map(s => `<option value="${s.entity_id}">`).join('');
+  } catch (e) { /* silenzioso */ }
+}
+
+// ---------------------------------------------------------------- Wiring
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('btn-analyze-stats').addEventListener('click', analyzeStats);
+  document.getElementById('btn-stats-preview').addEventListener('click', () => repairStats(true));
+  document.getElementById('btn-stats-repair').addEventListener('click', () => repairStats(false));
+  document.getElementById('btn-list-orphans').addEventListener('click', listOrphans);
+  document.getElementById('btn-merge-preview').addEventListener('click', () => mergeCall(true));
+  document.getElementById('btn-merge-exec').addEventListener('click', () => mergeCall(false));
+  document.getElementById('merge-target').addEventListener('input', fillTargetSuggestions);
+  document.getElementById('orphan-result').addEventListener('click', e => {
+    const btn = e.target.closest('.js-reassoc');
+    if (!btn) return;
+    document.getElementById('merge-source').value = btn.dataset.source;
+    document.getElementById('merge-target').value = btn.dataset.target;
+    document.querySelector('#btn-merge-preview').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+});
+</script>
+{% endblock %}
